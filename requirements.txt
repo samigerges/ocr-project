@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+pymupdf
+Pillow
+opencv-python
+numpy
+paddlepaddle==2.6.2
+paddleocr==2.8.1
