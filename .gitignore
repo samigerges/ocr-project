@@ -1,0 +1,54 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+storage/
+__pycache__/
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Storage (OCR outputs)
+# =========================
+storage/
+
+# If you later want to keep folder structure but not files:
+# storage/*
+# !storage/.gitkeep
+
+# =========================
+# PaddleOCR model cache
+# =========================
+.paddleocr/
+**/.paddleocr/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Docker
+# =========================
+*.tar
+*.gz
