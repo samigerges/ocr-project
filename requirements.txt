@@ -8,3 +8,5 @@ opencv-python
 numpy
 paddlepaddle==2.6.2
 paddleocr==2.8.1
+rq==1.15.1
+redis
