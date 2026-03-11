@@ -1,38 +1,83 @@
+# ===============================
 # Python
+# ===============================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-# Virtual environment
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# Python build
+# Python build artifacts
 build/
 dist/
 *.egg-info/
+.eggs/
 
-# Logs
+# Python logs
 *.log
 
-# IDE
-.vscode/
-.idea/
+# ===============================
+# PaddleOCR / ML models
+# ===============================
+*.pdmodel
+*.pdiparams
+*.onnx
 
-# OS
+# ===============================
+# Storage (OCR artifacts)
+# ===============================
+storage/
+
+# ===============================
+# Environment variables
+# ===============================
+.env
+.env.*
+
+# ===============================
+# Docker
+# ===============================
+*.pid
+docker-compose.override.yml
+
+# ===============================
+# Node / Frontend
+# ===============================
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===============================
+# OS files
+# ===============================
 .DS_Store
 Thumbs.db
 
-# Environment variables
-.env
+# ===============================
+# IDE
+# ===============================
+.vscode/
+.idea/
 
-# Storage (OCR artifacts)
-storage/
+# ===============================
+# Testing / cache
+# ===============================
+.pytest_cache/
+.coverage
+coverage/
 
-# PaddleOCR downloaded models
-.paddleocr/
-
-# Docker
-*.tar
+# ===============================
+# Misc
+# ===============================
+*.sqlite
+*.db
+*.bak

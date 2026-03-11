@@ -30,6 +30,74 @@ def get_ocr_engine(lang: str = "en") -> PaddleOCR:
 
     return _OCR_ENGINE
 
+def page_average_confidence(page_result: dict) -> float:
+    lines = page_result.get("lines", []) or []
+    if not lines:
+        return 0.0
+    vals = [float(l.get("confidence", 0.0) or 0.0) for l in lines]
+    return sum(vals) / len(vals)
+
+def choose_better_result(result_a: dict, result_b: dict) -> tuple[str, dict]:
+    """
+    Compare two OCR page results and return:
+      (winner_name, winner_result)
+    """
+    conf_a = page_average_confidence(result_a)
+    conf_b = page_average_confidence(result_b)
+
+    if conf_b > conf_a:
+        return "strong", result_b
+    return "basic", result_a
+
+def run_ocr_with_retry_for_page(
+    page_no: int,
+    image_name: str,
+    processed_dir: Path,
+    confidence_threshold: float = 0.90,
+    lang: str = "en",
+) -> tuple[dict, dict]:
+    """
+    OCR a page using:
+    1) basic preprocess first
+    2) if avg confidence < threshold, retry with strong preprocess
+
+    Returns:
+      final_page_result, metadata
+    """
+    basic_img = processed_dir / "basic" / image_name
+    if not basic_img.exists():
+        raise FileNotFoundError(f"Missing basic preprocessed image: {basic_img}")
+
+    basic_result = run_ocr_on_image(basic_img, lang=lang)
+    basic_conf = page_average_confidence(basic_result)
+
+    meta = {
+        "page": page_no,
+        "basic_confidence": basic_conf,
+        "retry_used": False,
+        "selected_mode": "basic",
+    }
+
+    if basic_conf >= confidence_threshold:
+        return basic_result, meta
+
+    strong_img = processed_dir / "strong" / image_name
+    if not strong_img.exists():
+        # no retry image available, keep basic
+        return basic_result, meta
+
+    strong_result = run_ocr_on_image(strong_img, lang=lang)
+    strong_conf = page_average_confidence(strong_result)
+
+    winner_name, winner_result = choose_better_result(basic_result, strong_result)
+
+    meta.update({
+        "retry_used": True,
+        "strong_confidence": strong_conf,
+        "selected_mode": winner_name,
+    })
+
+    return winner_result, meta
 
 def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
     """
@@ -73,41 +141,36 @@ def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
 
     return {"lines": lines}
 
-
 def run_ocr_from_manifest(
     pages_dir: Path,
     processed_dir: Path,
     ocr_dir: Path,
     lang: str = "en",
-) -> Dict[int, Dict[str, Any]]:
+    confidence_threshold: float = 0.90,
+):
     """
-    Read pages_dir/manifest.json
-    - If source == 'native': load page_XXXX.native.txt
-    - If source == 'ocr': run OCR on processed_dir/page_XXXX.png
-    Save OCR JSON per page into ocr_dir/page_XXXX.json
+    Read manifest.json.
+    OCR only pages with source == 'ocr'.
 
-    Returns: dict keyed by page_no
+    Uses:
+      processed/basic/page_XXXX.png first
+      then retries with processed/strong/page_XXXX.png if needed
+
+    Saves chosen per-page OCR JSON into ocr_dir.
     """
     manifest_path = pages_dir / "manifest.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"Missing manifest.json: {manifest_path}")
-
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
     ocr_dir.mkdir(parents=True, exist_ok=True)
 
-    results: Dict[int, Dict[str, Any]] = {}
+    results = {}
 
     for item in manifest:
-        page_no = int(item["page"])
-        source = item.get("source")
-        artifact = item.get("artifact")
+        page_no = item["page"]
 
-        if source == "native":
-            native_path = pages_dir / artifact
-            if not native_path.exists():
-                raise FileNotFoundError(f"Native text file missing: {native_path}")
-
-            text = native_path.read_text(encoding="utf-8", errors="replace")
+        if item["source"] == "native":
+            native_path = pages_dir / item["artifact"]
+            text = native_path.read_text(encoding="utf-8")
 
             results[page_no] = {
                 "source": "native",
@@ -118,22 +181,32 @@ def run_ocr_from_manifest(
                 ],
             }
 
-        elif source == "ocr":
-            img_path = processed_dir / artifact
-            page_result = run_ocr_on_image(img_path, lang=lang)
+        else:
+            image_name = item["artifact"]
+
+            page_result, retry_meta = run_ocr_with_retry_for_page(
+                page_no=page_no,
+                image_name=image_name,
+                processed_dir=processed_dir,
+                confidence_threshold=confidence_threshold,
+                lang=lang,
+            )
+
+            final_payload = {
+                "lines": page_result["lines"],
+                "retry_meta": retry_meta,
+            }
 
             out_json = ocr_dir / f"page_{page_no:04d}.json"
             out_json.write_text(
-                json.dumps(page_result, ensure_ascii=False, indent=2),
+                json.dumps(final_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
             results[page_no] = {
                 "source": "ocr",
                 "lines": page_result["lines"],
+                "retry_meta": retry_meta,
             }
-
-        else:
-            raise ValueError(f"Unknown source in manifest for page {page_no}: {source}")
 
     return results

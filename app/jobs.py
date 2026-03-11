@@ -6,6 +6,7 @@ from app.storage import doc_dir
 from app.pipeline.render import render_document
 from app.pipeline.preprocess import preprocess_document_pages
 from app.pipeline.ocr import run_ocr_from_manifest
+from app.pipeline.postprocess import postprocess_ocr_dir
 from app.pipeline.assemble import assemble_results
 
 
@@ -47,15 +48,24 @@ def process_document_job(doc_id: str) -> dict:
     _set_progress("render", 20, "Rendering pages / extracting native text")
     render_document(input_path, pages_dir)
 
-    # 3) preprocess
-    _set_progress("preprocess", 45, "Preprocessing OCR pages")
-    preprocess_document_pages(pages_dir, processed_dir)
+    # 3) preprocess basic
+    _set_progress("preprocess_basic", 40, "Preprocessing OCR pages (basic)")
+    preprocess_document_pages(pages_dir, processed_dir, mode="basic")
 
-    # 4) OCR
-    _set_progress("ocr", 80, "Running OCR")
-    run_ocr_from_manifest(pages_dir, processed_dir, ocr_dir)
+    # 4) preprocess strong retry variant
+    _set_progress("preprocess_strong", 55, "Preparing retry preprocess variant")
+    preprocess_document_pages(pages_dir, processed_dir, mode="strong")
 
-    # 5) assemble
+    # 5) OCR with retry logic
+    _set_progress("ocr", 80, "Running OCR with retry methodology")
+    run_ocr_from_manifest(pages_dir, processed_dir, ocr_dir, lang="en", confidence_threshold=0.90)
+
+    # 6) postprocess
+    _set_progress("postprocess" , 90 , "postprocessing OCR results")
+    post_dir = base / "postprocessed"
+    postprocess_ocr_dir(ocr_dir , post_dir)
+                  
+    # 7) assemble
     _set_progress("assemble", 95, "Assembling final outputs")
     result = assemble_results(doc_id, pages_dir, ocr_dir, out_dir)
 

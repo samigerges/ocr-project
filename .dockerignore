@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Project runtime artifacts
+storage/
+.paddleocr/
+
+# UI (important)
+ui/node_modules/
+ui/dist/
+ui/.vite/
+ui/.cache/
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
