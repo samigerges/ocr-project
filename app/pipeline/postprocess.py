@@ -1,166 +1,171 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Any
 
 
-# Tokenization: words + non-words (keep separators)
-WORD_RE = re.compile(r"[A-Za-z]+|[^A-Za-z]+")
+# -------------------------------------------------
+# Character normalization
+# -------------------------------------------------
 
-
-def tokenize_keep_separators(text: str) -> List[str]:
-    return WORD_RE.findall(text)
-
-
-def levenshtein(a: str, b: str) -> int:
-    if a == b:
-        return 0
-    if not a:
-        return len(b)
-    if not b:
-        return len(a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        cur = [i]
-        for j, cb in enumerate(b, start=1):
-            ins = cur[j - 1] + 1
-            dele = prev[j] + 1
-            sub = prev[j - 1] + (ca != cb)
-            cur.append(min(ins, dele, sub))
-        prev = cur
-    return prev[-1]
-
-
-def is_letters_only(token: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z]+", token))
-
-
-def looks_sensitive(token: str) -> bool:
-    """
-    Skip anything that could be an email/url/id/code/date/number/mixed.
-    """
-    if "@" in token:
-        return True
-    if "://" in token or token.startswith("www."):
-        return True
-    if re.search(r"\d", token):
-        return True
-    if re.search(r"[_\-#/\\]", token):
-        return True
-    return False
-
-
-def preserve_case(original: str, corrected: str) -> str:
-    if original.isupper():
-        return corrected.upper()
-    if original.istitle():
-        return corrected.title()
-    if original.islower():
-        return corrected.lower()
-    return corrected
-
-
-@dataclass
-class PostprocessConfig:
-    enabled: bool = True
-    max_edit_distance: int = 1
-    max_word_len: int = 25
-    dictionary: Optional[set[str]] = None
-
-
-DEFAULT_COMMON_WORDS = {
-    # starter list (expand later)
-    "name", "professor", "current", "position", "my", "is", "and", "the", "a", "an",
-    "email", "phone", "address", "skills", "experience", "education", "summary",
-    "project", "projects", "work", "university", "engineer", "engineering",
+CHAR_REPLACEMENTS = {
+    "ﬁ": "fi",
+    "ﬂ": "fl",
+    "—": "-",
+    "–": "-",
 }
 
 
-def build_default_config() -> PostprocessConfig:
-    return PostprocessConfig(dictionary=set(DEFAULT_COMMON_WORDS))
+def normalize_text(text: str) -> str:
+    for k, v in CHAR_REPLACEMENTS.items():
+        text = text.replace(k, v)
+
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
-def best_dictionary_match(token: str, cfg: PostprocessConfig) -> Optional[str]:
-    if not cfg.dictionary:
-        return None
+# -------------------------------------------------
+# Layout sorting
+# -------------------------------------------------
 
-    low = token.lower()
-    if low in cfg.dictionary:
-        return None
+def sort_lines_by_layout(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Sort lines using bounding box coordinates.
+    """
+    def key_fn(line):
+        bbox = line.get("bbox")
+        if not bbox:
+            return (0, 0)
 
-    best = None
-    best_dist = 10**9
+        x = bbox[0][0]
+        y = bbox[0][1]
 
-    for w in cfg.dictionary:
-        if abs(len(w) - len(low)) > cfg.max_edit_distance:
+        return (y, x)
+
+    return sorted(lines, key=key_fn)
+
+
+# -------------------------------------------------
+# Garbage filtering
+# -------------------------------------------------
+
+def is_garbage(text: str) -> bool:
+    if not text:
+        return True
+
+    letters = sum(c.isalpha() for c in text)
+    symbols = sum(not c.isalnum() for c in text)
+
+    if letters == 0 and symbols > 3:
+        return True
+
+    if symbols > letters * 2:
+        return True
+
+    return False
+
+
+def remove_garbage_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cleaned = []
+
+    for l in lines:
+        text = (l.get("text") or "").strip()
+
+        if is_garbage(text):
             continue
-        d = levenshtein(low, w)
-        if d < best_dist:
-            best_dist = d
-            best = w
-            if best_dist == 0:
-                break
 
-    if best is None or best_dist > cfg.max_edit_distance:
-        return None
+        cleaned.append(l)
 
-    return preserve_case(token, best)
+    return cleaned
 
 
-def postprocess_text(text: str, cfg: PostprocessConfig) -> Dict[str, Any]:
-    tokens = tokenize_keep_separators(text)
-    corrections = []
+# -------------------------------------------------
+# Hyphen merge
+# -------------------------------------------------
 
-    for i, tok in enumerate(tokens):
-        if not is_letters_only(tok):
-            continue
-        if looks_sensitive(tok):
-            continue
-        if len(tok) > cfg.max_word_len:
-            continue
+def merge_hyphenated_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged = []
+    i = 0
 
-        new_tok = best_dictionary_match(tok, cfg) if cfg.enabled else None
-        if new_tok and new_tok != tok:
-            corrections.append({"from": tok, "to": new_tok, "token_index": i})
-            tokens[i] = new_tok
+    while i < len(lines):
+        current = lines[i]
+        text = current.get("text", "")
 
-    return {"text_out": "".join(tokens), "corrections": corrections}
+        if text.endswith("-") and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            merged_text = text[:-1] + nxt.get("text", "")
+
+            new_line = dict(current)
+            new_line["text"] = merged_text
+
+            merged.append(new_line)
+
+            i += 2
+        else:
+            merged.append(current)
+            i += 1
+
+    return merged
 
 
-def postprocess_page_result(page_result: Dict[str, Any], cfg: PostprocessConfig) -> Dict[str, Any]:
+# -------------------------------------------------
+# Main postprocess
+# -------------------------------------------------
+
+def postprocess_page_result(page_result: Dict[str, Any]) -> Dict[str, Any]:
+
     lines = page_result.get("lines", []) or []
+
+    lines = sort_lines_by_layout(lines)
+
+    lines = remove_garbage_lines(lines)
+
+    lines = merge_hyphenated_lines(lines)
+
     out_lines = []
-    page_corrections = []
 
     for ln in lines:
         raw = (ln.get("text") or "").strip()
-        processed = postprocess_text(raw, cfg) if cfg.enabled else {"text_out": raw, "corrections": []}
 
-        out_ln = dict(ln)
-        out_ln["text_raw"] = raw
-        out_ln["text_clean"] = processed["text_out"]
-        out_ln["corrections"] = processed["corrections"]
+        clean = normalize_text(raw)
 
-        if processed["corrections"]:
-            page_corrections.extend(processed["corrections"])
+        new_ln = dict(ln)
+        new_ln["text_raw"] = raw
+        new_ln["text_clean"] = clean
 
-        out_lines.append(out_ln)
+        out_lines.append(new_ln)
 
-    return {"lines": out_lines, "corrections": page_corrections}
+    return {
+        "lines": out_lines
+    }
 
 
-def postprocess_ocr_dir(ocr_dir: Path, out_dir: Path, cfg: Optional[PostprocessConfig] = None) -> int:
-    cfg = cfg or build_default_config()
+# -------------------------------------------------
+# Directory processor
+# -------------------------------------------------
+
+def postprocess_ocr_dir(ocr_dir: Path, out_dir: Path) -> int:
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pages = sorted(ocr_dir.glob("page_*.json"))
+
     count = 0
+
     for p in pages:
         page_result = json.loads(p.read_text(encoding="utf-8"))
-        cleaned = postprocess_page_result(page_result, cfg)
-        (out_dir / p.name).write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        cleaned = postprocess_page_result(page_result)
+
+        out_path = out_dir / p.name
+
+        out_path.write_text(
+            json.dumps(cleaned, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
         count += 1
+
     return count
