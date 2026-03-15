@@ -69,14 +69,12 @@ def process_document_job(doc_id: str) -> dict:
     postprocess_ocr_dir(ocr_dir, post_dir)
 
     # 7) LLM refine
-    _set_progress("llm_refine", 85, "Refining low-confidence lines with LLM")
-
+    _set_progress("llm", 85, "refining with LLM")
     llm_dir = base / "llm"
     refine_ocr_dir(post_dir, llm_dir)
 
     # 8) assemble
     _set_progress("assemble", 95, "Assembling final outputs")
-
     result = assemble_results(doc_id, pages_dir, llm_dir, out_dir)
 
     _set_progress("done", 100, "Done")

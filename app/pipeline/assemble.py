@@ -10,17 +10,7 @@ def assemble_results(
     ocr_dir: Path,
     out_dir: Path,
 ) -> dict:
-    """
-    Assemble final outputs from:
-      - pages_dir/manifest.json
-      - native text artifacts in pages_dir (for source == "native")
-      - OCR artifacts in:
-          storage/<doc_id>/postprocessed/page_XXXX.json (preferred)
-          fallback to ocr_dir/page_XXXX.json
-    Writes:
-      - out_dir/result.json
-      - out_dir/result.txt
-    """
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = pages_dir / "manifest.json"
@@ -32,57 +22,88 @@ def assemble_results(
     pages_out = []
     full_text_parts: list[str] = []
 
-    # Preferred postprocessed dir (sibling of ocr_dir, created by postprocess step)
-    postprocessed_dir = ocr_dir.parent / "postprocessed"
+    base = ocr_dir.parent
+
+    llm_dir = base / "llm"
+    postprocessed_dir = base / "postprocessed"
 
     for item in manifest:
+
         page_no = int(item["page"])
         source = item["source"]
 
         if source == "native":
+
             native_path = pages_dir / item["artifact"]
+
             text = native_path.read_text(encoding="utf-8") if native_path.exists() else ""
 
             page_obj = {
                 "page": page_no,
                 "source": "native",
                 "text": text,
-                "lines": [{"text": ln, "confidence": 1.0, "bbox": None}
-                          for ln in text.splitlines() if ln.strip()],
+                "lines": [
+                    {"text": ln, "confidence": 1.0, "bbox": None}
+                    for ln in text.splitlines()
+                    if ln.strip()
+                ],
             }
+
             pages_out.append(page_obj)
+
             if text.strip():
                 full_text_parts.append(text.strip())
+
             continue
 
-        # OCR page JSON: prefer postprocessed, fallback to raw ocr
-        candidate = postprocessed_dir / f"page_{page_no:04d}.json"
-        ocr_json = candidate if candidate.exists() else (ocr_dir / f"page_{page_no:04d}.json")
+        # -------- PRIORITY: LLM → postprocessed → OCR --------
 
-        if not ocr_json.exists():
-            page_obj = {"page": page_no, "source": "ocr", "text": "", "lines": []}
+        llm_json = llm_dir / f"page_{page_no:04d}.json"
+        post_json = postprocessed_dir / f"page_{page_no:04d}.json"
+        raw_json = ocr_dir / f"page_{page_no:04d}.json"
+
+        if llm_json.exists():
+            page_json = llm_json
+        elif post_json.exists():
+            page_json = post_json
+        else:
+            page_json = raw_json
+
+        if not page_json.exists():
+
+            page_obj = {
+                "page": page_no,
+                "source": "ocr",
+                "text": "",
+                "lines": [],
+            }
+
             pages_out.append(page_obj)
             continue
 
-        page_result = json.loads(ocr_json.read_text(encoding="utf-8"))
+        page_result = json.loads(page_json.read_text(encoding="utf-8"))
+
         lines = page_result.get("lines", []) or []
 
-        # Build text from cleaned text if available, otherwise raw text
-        page_text = "\n".join([
-            ((l.get("text_clean") or l.get("text") or "")).strip()
-            for l in lines
-            if ((l.get("text_clean") or l.get("text") or "")).strip()
-        ]).strip()
+        page_text = "\n".join(
+            [
+                l.get("text_after_llm")
+                or l.get("text_clean")
+                or l.get("text")
+                or ""
+                for l in lines
+            ]
+        ).strip()
 
-        # Store per-page lines; keep compatibility whether postprocessed or raw
-        pages_out.append({
-            "page": page_no,
-            "source": "ocr",
-            "text": page_text,
-            "lines": lines,
-            # Optional extra metadata if postprocessed file contains it
-            "corrections": page_result.get("corrections", []),
-        })
+        pages_out.append(
+            {
+                "page": page_no,
+                "source": "ocr",
+                "text": page_text,
+                "lines": lines,
+                "corrections": page_result.get("corrections", []),
+            }
+        )
 
         if page_text:
             full_text_parts.append(page_text)
@@ -95,8 +116,12 @@ def assemble_results(
 
     (out_dir / "result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
-    (out_dir / "result.txt").write_text(result["full_text"], encoding="utf-8")
+
+    (out_dir / "result.txt").write_text(
+        result["full_text"],
+        encoding="utf-8",
+    )
 
     return result

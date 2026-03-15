@@ -3,37 +3,69 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import requests
+from typing import List, Dict, Any
 
-CONFIDENCE_THRESHOLD = 0.96
+# ------------------------------
+# Configuration
+# ------------------------------
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+CONFIDENCE_THRESHOLD = 0.95
+
+OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
 MODEL_NAME = "qwen2.5:7b"
 
 
-PROMPT_TEMPLATE = """
-You are correcting OCR output.
+# ------------------------------
+# Prompts
+# ------------------------------
+
+CORRECTION_PROMPT = """
+You are correcting OCR spelling mistakes.
 
 Rules:
-- Fix spelling mistakes caused by OCR.
+- Fix only spelling errors caused by OCR.
+- Preserve the meaning exactly.
 - Do NOT invent information.
-- Do NOT change numbers, emails, URLs, or IDs.
-- Keep the meaning exactly the same.
+- Do NOT modify numbers, emails, URLs, IDs, or dates.
 
-Return ONLY the corrected line.
+Text:
+{text}
 
-OCR line:
-{line}
+Return the corrected text only.
 """
 
 
-def refine_line_with_llm(text: str) -> str:
+REORDER_PROMPT = """
+You are reconstructing the correct reading order of OCR text.
 
-    prompt = PROMPT_TEMPLATE.format(line=text)
+The text lines are already corrected but may be in the wrong order.
+
+Your task:
+- Reorder them into the correct reading order.
+- Merge lines if they belong to the same sentence.
+
+Rules:
+- Do NOT invent information.
+- Do NOT change the content.
+- Only reorder or merge lines.
+
+Lines:
+{lines}
+
+Return the reconstructed text.
+"""
+
+
+# ------------------------------
+# LLM Call
+# ------------------------------
+
+def _call_llm(prompt: str) -> str:
 
     payload = {
         "model": MODEL_NAME,
         "prompt": prompt,
-        "stream": False,
+        "stream": False
     }
 
     r = requests.post(OLLAMA_URL, json=payload)
@@ -44,12 +76,58 @@ def refine_line_with_llm(text: str) -> str:
     return data["response"].strip()
 
 
-def refine_page(page_result: dict) -> dict:
+# ------------------------------
+# Spelling correction
+# ------------------------------
+
+def spelling_correction(text: str) -> str:
+
+    if not text.strip():
+        return text
+
+    prompt = CORRECTION_PROMPT.format(text=text)
+
+    try:
+        return _call_llm(prompt)
+    except Exception:
+        # fallback if LLM fails
+        return text
+
+
+# ------------------------------
+# Semantic reorder
+# ------------------------------
+
+def semantic_reorder(lines: List[str]) -> str:
+
+    if not lines:
+        return ""
+
+    # numbering improves LLM reasoning
+    numbered_lines = "\n".join(
+        f"{i+1}. {line}" for i, line in enumerate(lines) if line.strip()
+    )
+
+    prompt = REORDER_PROMPT.format(lines=numbered_lines)
+
+    try:
+        return _call_llm(prompt)
+    except Exception:
+        # fallback if LLM fails
+        return "\n".join(lines)
+
+
+# ------------------------------
+# Page refinement
+# ------------------------------
+
+def refine_page(page_result: Dict[str, Any]) -> Dict[str, Any]:
 
     lines = page_result.get("lines", [])
 
-    new_lines = []
-    refined_count = 0
+    corrected_lines = []
+
+    output_lines = []
 
     for ln in lines:
 
@@ -60,32 +138,36 @@ def refine_page(page_result: dict) -> dict:
 
         new_ln["text_before_llm"] = text
 
-        if confidence < CONFIDENCE_THRESHOLD and text.strip():
+        # correct only low confidence
+        if confidence < CONFIDENCE_THRESHOLD:
 
-            try:
-                refined = refine_line_with_llm(text)
+            corrected = spelling_correction(text)
 
-                new_ln["text_after_llm"] = refined
-                new_ln["llm_used"] = True
-
-                refined_count += 1
-
-            except Exception:
-                new_ln["text_after_llm"] = text
-                new_ln["llm_used"] = False
+            new_ln["text_after_llm"] = corrected
+            new_ln["llm_corrected"] = True
 
         else:
 
-            new_ln["text_after_llm"] = text
-            new_ln["llm_used"] = False
+            corrected = text
 
-        new_lines.append(new_ln)
+            new_ln["text_after_llm"] = corrected
+            new_ln["llm_corrected"] = False
+
+        corrected_lines.append(corrected)
+        output_lines.append(new_ln)
+
+    # reorder after correction
+    reordered_text = semantic_reorder(corrected_lines)
 
     return {
-        "lines": new_lines,
-        "refined_lines": refined_count
+        "lines": output_lines,
+        "reordered_text": reordered_text
     }
 
+
+# ------------------------------
+# Directory refinement
+# ------------------------------
 
 def refine_ocr_dir(ocr_dir: Path, out_dir: Path) -> int:
 
@@ -97,13 +179,15 @@ def refine_ocr_dir(ocr_dir: Path, out_dir: Path) -> int:
 
     for p in pages:
 
-        page_result = json.loads(p.read_text(encoding="utf-8"))
+        page_result = json.loads(
+            p.read_text(encoding="utf-8")
+        )
 
         refined = refine_page(page_result)
 
         (out_dir / p.name).write_text(
             json.dumps(refined, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            encoding="utf-8"
         )
 
         count += 1
