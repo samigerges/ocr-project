@@ -7,7 +7,7 @@ from PIL import Image
 from app.pipeline.router import should_use_native_text
 
 
-def render_document(input_path: Path, pages_dir: Path, dpi: int = 200) -> list[Path]:
+def render_document(input_path: Path, pages_dir: Path, dpi: int = 300) -> list[Path]:
     """
     Convert input document into per-page artifacts inside pages_dir.
 

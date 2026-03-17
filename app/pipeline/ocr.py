@@ -7,7 +7,8 @@ os.environ["FLAGS_use_new_executor"] = "0"
 
 from pathlib import Path
 import json
-from typing import Optional, Dict, Any
+import re
+from typing import Optional
 
 from paddleocr import PaddleOCR
 
@@ -30,12 +31,77 @@ def get_ocr_engine(lang: str = "en") -> PaddleOCR:
 
     return _OCR_ENGINE
 
+
 def page_average_confidence(page_result: dict) -> float:
     lines = page_result.get("lines", []) or []
     if not lines:
         return 0.0
-    vals = [float(l.get("confidence", 0.0) or 0.0) for l in lines]
-    return sum(vals) / len(vals)
+
+    values = [float(line.get("confidence", 0.0) or 0.0) for line in lines]
+    return sum(values) / len(values)
+
+
+def line_has_suspicious_ocr(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+
+    if any(ch in stripped for ch in ("~", "|", "\u00a6", "`")):
+        return True
+
+    if re.search(r"\b[Il]\d{2,}\b", stripped):
+        return True
+
+    if re.search(r"\b\d{2,}[Il]\b", stripped):
+        return True
+
+    if re.search(r"\b[Il]\d{2}[Il]\b", stripped):
+        return True
+
+    if re.search(r"[A-Za-z]{3,}[~\-]$", stripped):
+        return True
+
+    odd_punctuation = sum(1 for ch in stripped if ch in f"~|\u00a6`")
+    return odd_punctuation > 0
+
+
+def page_suspicious_line_count(page_result: dict) -> int:
+    lines = page_result.get("lines", []) or []
+    return sum(1 for line in lines if line_has_suspicious_ocr(line.get("text", "")))
+
+
+def page_quality_score(page_result: dict) -> float:
+    lines = page_result.get("lines", []) or []
+    if not lines:
+        return 0.0
+
+    avg_conf = page_average_confidence(page_result)
+    suspicious_lines = page_suspicious_line_count(page_result)
+    short_orphan_lines = sum(
+        1 for line in lines if len((line.get("text") or "").strip()) <= 3
+    )
+
+    return (
+        avg_conf
+        - (0.015 * suspicious_lines)
+        - (0.01 * short_orphan_lines)
+    )
+
+
+def should_retry_page(page_result: dict, confidence_threshold: float) -> bool:
+    avg_conf = page_average_confidence(page_result)
+    suspicious_lines = page_suspicious_line_count(page_result)
+
+    if avg_conf < confidence_threshold:
+        return True
+
+    # High-confidence pages often only contain harmless artifacts such as
+    # margin numbers or hyphenated wraps, so don't force a destructive retry.
+    if avg_conf < (confidence_threshold + 0.03) and suspicious_lines >= 2:
+        return True
+
+    return False
+
 
 def choose_better_result(result_a: dict, result_b: dict) -> tuple[str, dict]:
     """
@@ -44,10 +110,17 @@ def choose_better_result(result_a: dict, result_b: dict) -> tuple[str, dict]:
     """
     conf_a = page_average_confidence(result_a)
     conf_b = page_average_confidence(result_b)
+    score_a = page_quality_score(result_a)
+    score_b = page_quality_score(result_b)
 
-    if conf_b > conf_a:
+    if conf_b >= conf_a + 0.01:
         return "strong", result_b
+
+    if conf_b >= conf_a - 0.005 and score_b > score_a + 0.02:
+        return "strong", result_b
+
     return "basic", result_a
+
 
 def run_ocr_with_retry_for_page(
     page_no: int,
@@ -59,7 +132,7 @@ def run_ocr_with_retry_for_page(
     """
     OCR a page using:
     1) basic preprocess first
-    2) if avg confidence < threshold, retry with strong preprocess
+    2) retry with strong preprocess when confidence or text heuristics look weak
 
     Returns:
       final_page_result, metadata
@@ -74,30 +147,35 @@ def run_ocr_with_retry_for_page(
     meta = {
         "page": page_no,
         "basic_confidence": basic_conf,
+        "basic_quality_score": page_quality_score(basic_result),
+        "basic_suspicious_lines": page_suspicious_line_count(basic_result),
         "retry_used": False,
         "selected_mode": "basic",
     }
 
-    if basic_conf >= confidence_threshold:
+    if not should_retry_page(basic_result, confidence_threshold):
         return basic_result, meta
 
     strong_img = processed_dir / "strong" / image_name
     if not strong_img.exists():
-        # no retry image available, keep basic
         return basic_result, meta
 
     strong_result = run_ocr_on_image(strong_img, lang=lang)
     strong_conf = page_average_confidence(strong_result)
-
     winner_name, winner_result = choose_better_result(basic_result, strong_result)
 
-    meta.update({
-        "retry_used": True,
-        "strong_confidence": strong_conf,
-        "selected_mode": winner_name,
-    })
+    meta.update(
+        {
+            "retry_used": True,
+            "strong_confidence": strong_conf,
+            "strong_quality_score": page_quality_score(strong_result),
+            "strong_suspicious_lines": page_suspicious_line_count(strong_result),
+            "selected_mode": winner_name,
+        }
+    )
 
     return winner_result, meta
+
 
 def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
     """
@@ -108,12 +186,8 @@ def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
         raise FileNotFoundError(f"Image not found for OCR: {image_path}")
 
     engine = get_ocr_engine(lang=lang)
-
-    # Some PaddleOCR versions accept extra args; keep it minimal
     result = engine.ocr(str(image_path))
 
-    # PaddleOCR returns various nested formats across versions.
-    # We normalize it into a list of items: [ [box, (text, conf)], ... ]
     if not result:
         return {"lines": []}
 
@@ -123,23 +197,22 @@ def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
 
     lines = []
     for item in page:
-        
         try:
             box, text_conf = item
             text, conf = text_conf
         except Exception:
-            
             continue
 
         lines.append(
             {
                 "text": str(text),
                 "confidence": float(conf),
-                "bbox": box,  
+                "bbox": box,
             }
         )
 
     return {"lines": lines}
+
 
 def run_ocr_from_manifest(
     pages_dir: Path,
@@ -162,7 +235,6 @@ def run_ocr_from_manifest(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     ocr_dir.mkdir(parents=True, exist_ok=True)
-
     results = {}
 
     for item in manifest:
@@ -180,33 +252,32 @@ def run_ocr_from_manifest(
                     if line.strip()
                 ],
             }
+            continue
 
-        else:
-            image_name = item["artifact"]
+        image_name = item["artifact"]
+        page_result, retry_meta = run_ocr_with_retry_for_page(
+            page_no=page_no,
+            image_name=image_name,
+            processed_dir=processed_dir,
+            confidence_threshold=confidence_threshold,
+            lang=lang,
+        )
 
-            page_result, retry_meta = run_ocr_with_retry_for_page(
-                page_no=page_no,
-                image_name=image_name,
-                processed_dir=processed_dir,
-                confidence_threshold=confidence_threshold,
-                lang=lang,
-            )
+        final_payload = {
+            "lines": page_result["lines"],
+            "retry_meta": retry_meta,
+        }
 
-            final_payload = {
-                "lines": page_result["lines"],
-                "retry_meta": retry_meta,
-            }
+        out_json = ocr_dir / f"page_{page_no:04d}.json"
+        out_json.write_text(
+            json.dumps(final_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
-            out_json = ocr_dir / f"page_{page_no:04d}.json"
-            out_json.write_text(
-                json.dumps(final_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
-            results[page_no] = {
-                "source": "ocr",
-                "lines": page_result["lines"],
-                "retry_meta": retry_meta,
-            }
+        results[page_no] = {
+            "source": "ocr",
+            "lines": page_result["lines"],
+            "retry_meta": retry_meta,
+        }
 
     return results
