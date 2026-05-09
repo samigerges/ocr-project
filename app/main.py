@@ -73,7 +73,21 @@ def get_result(doc_id: str):
     result_path = out_dir / "result.json"
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="Result not ready yet")
-    return json.loads(result_path.read_text(encoding="utf-8"))
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    invoice_path = out_dir / "invoice_fields.json"
+    if invoice_path.exists() and "invoice_fields" not in result:
+        result["invoice_fields"] = json.loads(invoice_path.read_text(encoding="utf-8"))
+    return result
+
+
+@app.get("/v1/documents/{doc_id}/invoice")
+def get_invoice_fields(doc_id: str):
+    out_path = doc_dir(doc_id) / "out" / "invoice_fields.json"
+    invoice_path = doc_dir(doc_id) / "invoice" / "invoice_fields.json"
+    path = out_path if out_path.exists() else invoice_path
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Invoice fields not ready yet")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @app.get("/v1/documents/{doc_id}/text", response_class=PlainTextResponse)
