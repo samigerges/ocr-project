@@ -253,6 +253,7 @@
 
 .invoice-value {
   font-weight: 700;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
