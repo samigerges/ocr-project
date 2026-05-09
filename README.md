@@ -1,6 +1,6 @@
 # OCR Document Processing Pipeline
 
-A **production-style OCR pipeline** for processing documents (PDF/images), extracting text, and visualizing the full processing pipeline through a web UI.
+A **production-style OCR pipeline** for processing documents (PDF/images), extracting structured invoice fields, and visualizing processing artifacts through a web UI.
 
 The system is designed with **modern backend architecture**:
 
@@ -73,7 +73,7 @@ Invoice/Receipt extraction
    │
    ▼
 Results
-(JSON + TXT + invoice_fields.json)
+(JSON + invoice_fields.json)
 ```
 
 ---
@@ -139,9 +139,9 @@ storage/
          basic/
          strong/
       ocr/
+      postprocessed/
       out/
          result.json
-         result.txt
 ```
 
 This allows the system to **inspect every stage of the OCR pipeline**.
@@ -185,16 +185,6 @@ GET /v1/documents/{doc_id}/result
 ```
 
 Returns structured JSON output.
-
----
-
-## Get Extracted Text
-
-```
-GET /v1/documents/{doc_id}/text
-```
-
-Returns plain text output.
 
 ---
 
@@ -295,7 +285,6 @@ upload
 -> preprocess strong
 -> OCR with retry
 -> postprocess
--> LLM refine
 -> assemble
 -> invoice field extraction
 -> invoice validation

@@ -5,12 +5,7 @@ import json
 
 
 def _line_text(line: dict) -> str:
-    return (
-        line.get("text_after_llm")
-        or line.get("text_clean")
-        or line.get("text")
-        or ""
-    ).strip()
+    return (line.get("text_clean") or line.get("text") or "").strip()
 
 
 def _bbox_bounds(line: dict) -> tuple[float, float, float, float] | None:
@@ -85,10 +80,6 @@ def assemble_results(
     pages_out = []
     full_text_parts: list[str] = []
 
-    base = ocr_dir.parent
-    llm_dir = base / "llm"
-    postprocessed_dir = base / "postprocessed"
-
     for item in manifest:
         page_no = int(item["page"])
         source = item["source"]
@@ -113,16 +104,7 @@ def assemble_results(
                 full_text_parts.append(text.strip())
             continue
 
-        llm_json = llm_dir / f"page_{page_no:04d}.json"
-        post_json = postprocessed_dir / f"page_{page_no:04d}.json"
-        raw_json = ocr_dir / f"page_{page_no:04d}.json"
-
-        if llm_json.exists():
-            page_json = llm_json
-        elif post_json.exists():
-            page_json = post_json
-        else:
-            page_json = raw_json
+        page_json = ocr_dir / f"page_{page_no:04d}.json"
 
         if not page_json.exists():
             page_obj = {
@@ -161,6 +143,4 @@ def assemble_results(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (out_dir / "result.txt").write_text(result["full_text"], encoding="utf-8")
-
     return result

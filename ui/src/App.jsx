@@ -8,7 +8,6 @@ export default function App() {
 
   const [job, setJob] = useState(null);
   const [pipeline, setPipeline] = useState(null);
-  const [resultText, setResultText] = useState("");
   const [resultJson, setResultJson] = useState(null);
   const invoiceFields = resultJson?.invoice_fields || null;
   const [error, setError] = useState("");
@@ -21,7 +20,6 @@ export default function App() {
 
   async function uploadAndProcess() {
     setError("");
-    setResultText("");
     setResultJson(null);
     setPipeline(null);
     setJob(null);
@@ -93,15 +91,6 @@ export default function App() {
 
         if (data.is_finished) {
           keepPolling = false;
-
-          try {
-            const txtRes = await fetch(`/v1/documents/${did}/text`);
-            if (txtRes.ok) {
-              setResultText(await txtRes.text());
-            }
-          } catch {
-            // ignore
-          }
 
           try {
             const jsonRes = await fetch(`/v1/documents/${did}/result`);
@@ -352,13 +341,6 @@ export default function App() {
                 </table>
               </div>
             )}
-          </section>
-        )}
-
-        {resultText && (
-          <section className="card">
-            <h2 className="section-title">5) Extracted Text</h2>
-            <pre className="text-box">{resultText}</pre>
           </section>
         )}
 

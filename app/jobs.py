@@ -8,7 +8,6 @@ from app.pipeline.render import render_document
 from app.pipeline.preprocess import preprocess_document_pages
 from app.pipeline.ocr import run_ocr_from_manifest
 from app.pipeline.postprocess import postprocess_ocr_dir
-from app.pipeline.llm_refine import refine_ocr_dir
 from app.pipeline.assemble import assemble_results
 from app.pipeline.invoice_extract import extract_invoice_from_result
 
@@ -29,7 +28,7 @@ def _set_progress(stage: str, progress: int, message: str = ""):
 
 def process_document_job(doc_id: str) -> dict:
     """
-    Background job: run pipeline and return results.json and results.txt
+    Background job: run pipeline and return result.json plus invoice fields.
     """
     base = doc_dir(doc_id)
     original_dir = base / "original"
@@ -73,16 +72,11 @@ def process_document_job(doc_id: str) -> dict:
     post_dir = base / "postprocessed"
     postprocess_ocr_dir(ocr_dir, post_dir)
 
-    # 7) LLM refine
-    _set_progress("llm", 85, "refining with LLM")
-    llm_dir = base / "llm"
-    refine_ocr_dir(post_dir, llm_dir)
+    # 7) assemble
+    _set_progress("assemble", 85, "Assembling final outputs")
+    result = assemble_results(doc_id, pages_dir, post_dir, out_dir)
 
-    # 8) assemble
-    _set_progress("assemble", 92, "Assembling final outputs")
-    result = assemble_results(doc_id, pages_dir, llm_dir, out_dir)
-
-    # 9) invoice extraction
+    # 8) invoice extraction
     _set_progress("invoice_extract", 97, "Extracting structured invoice fields")
     invoice_fields = extract_invoice_from_result(doc_id, result, out_dir)
     result["invoice_fields"] = invoice_fields

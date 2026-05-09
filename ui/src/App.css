@@ -181,15 +181,6 @@
   border: 1px dashed #cbd5e1;
 }
 
-.text-box {
-  white-space: pre-wrap;
-  background: #f9fafb;
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  max-height: 500px;
-  overflow: auto;
-}
 
 .json-box {
   white-space: pre-wrap;
