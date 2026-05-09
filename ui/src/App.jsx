@@ -288,13 +288,29 @@ export default function App() {
             </div>
 
             <div className="invoice-grid">
+              <Field label="Document" value={invoiceFields.document_title || invoiceFields.document_type} />
               <Field label="Vendor" value={invoiceFields.vendor_name} />
+              <Field label="Registration #" value={invoiceFields.vendor_registration_number} />
+              <Field label="Vendor Address" value={invoiceFields.vendor_address} />
+              <Field label="Phone" value={invoiceFields.vendor_phone} />
+              <Field label="Fax" value={invoiceFields.vendor_fax} />
+              <Field label="Email" value={invoiceFields.vendor_email} />
+              <Field label="GST ID" value={invoiceFields.gst_id} />
               <Field label="Invoice #" value={invoiceFields.invoice_number} />
               <Field label="Invoice Date" value={invoiceFields.invoice_date} />
+              <Field label="Time" value={invoiceFields.transaction_time} />
               <Field label="Due Date" value={invoiceFields.due_date} />
+              <Field label="Cashier" value={invoiceFields.cashier} />
+              <Field label="Salesperson" value={invoiceFields.salesperson} />
+              <Field label="Reference" value={invoiceFields.reference} />
+              <Field label="Total Qty" value={invoiceFields.total_quantity} />
               <Field label="Subtotal" value={formatMoney(invoiceFields.subtotal, invoiceFields.currency)} />
               <Field label="Tax" value={formatMoney(invoiceFields.tax, invoiceFields.currency)} />
+              <Field label="Discount" value={formatMoney(invoiceFields.discount, invoiceFields.currency)} />
+              <Field label="Rounding" value={formatMoney(invoiceFields.rounding, invoiceFields.currency)} />
               <Field label="Total" value={formatMoney(invoiceFields.total_amount, invoiceFields.currency)} />
+              <Field label="Cash" value={formatMoney(invoiceFields.cash_received, invoiceFields.currency)} />
+              <Field label="Change" value={formatMoney(invoiceFields.change_amount, invoiceFields.currency)} />
               <Field label="Currency" value={invoiceFields.currency} />
             </div>
 
@@ -315,6 +331,7 @@ export default function App() {
                 <table className="line-items-table">
                   <thead>
                     <tr>
+                      <th>Code</th>
                       <th>Description</th>
                       <th>Qty</th>
                       <th>Unit Price</th>
@@ -324,6 +341,7 @@ export default function App() {
                   <tbody>
                     {invoiceFields.line_items.map((item, index) => (
                       <tr key={`${item.description}-${index}`}>
+                        <td>{item.item_code || "-"}</td>
                         <td>{item.description || "-"}</td>
                         <td>{item.quantity ?? "-"}</td>
                         <td>{formatMoney(item.unit_price, invoiceFields.currency)}</td>

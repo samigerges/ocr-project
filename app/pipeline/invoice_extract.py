@@ -116,6 +116,93 @@ def _extract_labeled_date(text: str, labels: Iterable[str], *, prefer_day_first:
     return parse_invoice_date(match.group(1), prefer_day_first=prefer_day_first)
 
 
+
+def _extract_labeled_text(text: str, labels: Iterable[str], *, max_length: int = 120) -> str | None:
+    """Extract short single-line metadata values such as cashier, GST ID, and references."""
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    for line in text.splitlines():
+        match = re.search(rf"\b(?:{label_pattern})\b\s*[:#-]?\s*(.+)", line.strip(), flags=re.I)
+        if match:
+            value = match.group(1).strip().strip("|;,")
+            if value:
+                return value[:max_length]
+    return None
+
+
+def _extract_inline_labeled_text(text: str, label: str, *, stop_labels: Iterable[str] = (), max_length: int = 120) -> str | None:
+    """Extract metadata that can appear beside another label on the same receipt line."""
+    stop_pattern = "|".join(re.escape(stop_label).rstrip(r"\.") + r"\.?" for stop_label in stop_labels)
+    suffix = rf"(?=\s*(?:{stop_pattern})\s*[:#-]?|$)" if stop_pattern else r"$"
+    label_pattern = re.escape(label).rstrip(r"\.") + r"\.?"
+    for line in text.splitlines():
+        match = re.search(rf"(?<!\w){label_pattern}\s*[:#-]?\s*(.*?){suffix}", line.strip(), flags=re.I)
+        if match:
+            value = " ".join(match.group(1).split()).strip().strip("|;,")
+            if value:
+                return value[:max_length]
+    return None
+
+
+def extract_document_title(text: str) -> str | None:
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if re.fullmatch(r"CASH\s+(?:SALES|BILL)|(?:TAX\s+)?INVOICE|RECEIPT", cleaned, flags=re.I):
+            return cleaned.upper()
+    return None
+
+
+def extract_vendor_registration_number(text: str) -> str | None:
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if re.fullmatch(r"\(?[A-Z]{1,4}\d{4,}[A-Z0-9-]*\)?", cleaned, flags=re.I):
+            return cleaned.strip("()")
+    return None
+
+
+def extract_gst_id(text: str) -> str | None:
+    return _extract_labeled_text(text, ["GST ID", "GST No", "GSTIN"], max_length=60)
+
+
+def extract_contact_details(text: str) -> tuple[str | None, str | None, str | None]:
+    phone = None
+    fax = None
+    email = None
+    email_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, flags=re.I)
+    if email_match:
+        email = email_match.group(0)
+
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not phone:
+            tel_match = re.search(r"\b(?:TEL|PHONE)\b\s*[:#-]?\s*(.*?)(?=\s+FAX\b|$)", cleaned, flags=re.I)
+            if tel_match:
+                phone = tel_match.group(1).strip().strip("|;,") or None
+        if not fax:
+            fax_match = re.search(r"\bFAX\b\s*[:#-]?\s*(.+)", cleaned, flags=re.I)
+            if fax_match:
+                fax = fax_match.group(1).strip().strip("|;,") or None
+    return phone, fax, email
+
+
+def extract_transaction_time(text: str) -> str | None:
+    match = re.search(r"\bTime\b\s*[:#-]?\s*(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)", text, flags=re.I)
+    return match.group(1).strip() if match else None
+
+
+def extract_cashier(text: str) -> str | None:
+    return _extract_inline_labeled_text(text, "Cashier", stop_labels=["Time", "Date", "Salesperson", "Ref.", "Ref"], max_length=80)
+
+
+def extract_salesperson(text: str) -> str | None:
+    return _extract_inline_labeled_text(text, "Salesperson", stop_labels=["Ref.", "Ref", "Time", "Date"], max_length=80)
+
+
+def extract_reference(text: str) -> str | None:
+    return _extract_inline_labeled_text(text, "Ref.", stop_labels=["Time", "Date"], max_length=80) or _extract_inline_labeled_text(
+        text, "Ref", stop_labels=["Time", "Date"], max_length=80
+    )
+
+
 def detect_currency(text: str) -> str:
     for symbol, code in CURRENCY_SYMBOLS.items():
         if symbol in text:
@@ -242,9 +329,11 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
     address_lines: list[str] = []
     if vendor_name:
         start = vendor_end + 1
-        for line in cleaned[start : start + 4]:
-            if re.search(r"invoice|bill to|date|total|subtotal", line, re.I):
+        for line in cleaned[start : start + 6]:
+            if re.search(r"invoice|bill to|date|total|subtotal|cash\s+(?:sales|bill)|tel|fax|gst\s*id|@", line, re.I):
                 break
+            if extract_vendor_registration_number(line):
+                continue
             if re.search(r"\d|street|st\.?|road|rd\.?|ave|avenue|city|egypt|usa|zip|jalan|taman|johor|bahru", line, re.I):
                 address_lines.append(line)
     return vendor_name, "\n".join(address_lines) or None, buyer_name
@@ -414,16 +503,28 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     fields["subtotal"] = _extract_labeled_amount(text, ["Subtotal", "Sub Total", "Net Amount"])
     fields["tax"] = _extract_labeled_amount(text, ["Tax", "VAT", "Sales Tax", "GST Amount"])
     fields["discount"] = _extract_labeled_amount(text, ["Discount"])
+    fields["rounding"] = _extract_labeled_amount(text, ["Rounding", "Rounding Adjustment"])
     fields["total_amount"] = extract_total_amount(text)
     fields["total_quantity"] = extract_total_quantity(text)
     fields["cash_received"] = extract_cash_received(text)
     fields["change_amount"] = extract_change_amount(text)
     fields["currency"] = detect_currency(text)
     fields["payment_method"] = extract_payment_method(text)
+    fields["document_title"] = extract_document_title(text)
+    fields["vendor_registration_number"] = extract_vendor_registration_number(text)
+    fields["gst_id"] = extract_gst_id(text)
+    fields["cashier"] = extract_cashier(text)
+    fields["transaction_time"] = extract_transaction_time(text)
+    fields["salesperson"] = extract_salesperson(text)
+    fields["reference"] = extract_reference(text)
     fields["line_items"] = extract_line_items(text)
     vendor_name, vendor_address, buyer_name = _extract_vendor_and_buyer(lines)
+    vendor_phone, vendor_fax, vendor_email = extract_contact_details(text)
     fields["vendor_name"] = vendor_name
     fields["vendor_address"] = vendor_address
+    fields["vendor_phone"] = vendor_phone
+    fields["vendor_fax"] = vendor_fax
+    fields["vendor_email"] = vendor_email
     fields["buyer_name"] = buyer_name
 
     reasons = []

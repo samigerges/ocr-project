@@ -73,7 +73,11 @@ CASH : 327.00
 Change : 0.00
 """
     fields = extract_invoice_fields(text)
+    assert fields["document_title"] == "CASH SALES"
     assert fields["vendor_name"] == "SOON HUAT MACHINERY ENTERPRISE"
+    assert fields["vendor_registration_number"] == "JM0352019-K"
+    assert fields["vendor_address"] == "NO.53 JALAN PUTRA 1,\nTAMAN SRI PUTRA,\n81200 JOHOR BAHRU\nJOHOR"
+    assert fields["gst_id"] == "002116837376"
     assert fields["invoice_number"] == "CS00004040"
     assert fields["invoice_date"] == "2019-01-11"
     assert fields["total_amount"] == 327.00
@@ -159,9 +163,20 @@ Change : 0.00
 """
     fields = extract_invoice_fields(text)
     assert fields["document_type"] == "cash_sales_receipt"
+    assert fields["document_title"] == "CASH SALES"
+    assert fields["vendor_registration_number"] == "JM0352019-K"
+    assert fields["vendor_phone"] == "07-5547360 / 016-7993391"
+    assert fields["vendor_fax"] == "07-5624059"
+    assert fields["vendor_email"] == "SOONHUAT2000@HOTMAIL.COM"
+    assert fields["gst_id"] == "002116837376"
+    assert fields["cashier"] == "USER"
+    assert fields["transaction_time"] == "09:44:00"
+    assert fields["salesperson"] is None
+    assert fields["reference"] is None
     assert fields["total_quantity"] == 9
     assert fields["cash_received"] == 327.00
     assert fields["change_amount"] == 0.00
+    assert fields["rounding"] == 0.00
     assert len(fields["line_items"]) == 8
     assert fields["line_items"][0]["item_code"] == "1072"
     assert fields["line_items"][0]["description"] == "REPAIR ENGINE POWER SPRAYER (1UNIT) workmanship & service"
