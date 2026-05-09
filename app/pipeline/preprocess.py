@@ -93,6 +93,18 @@ def _prepare_basic(gray: np.ndarray) -> np.ndarray:
     return _add_white_border(base)
 
 
+def _prepare_receipt(gray: np.ndarray) -> np.ndarray:
+    """Prepare faded thermal receipts without destroying thin characters."""
+    deskewed = _deskew(gray)
+    trimmed = _trim_to_content(deskewed)
+    normalized = _normalize_contrast(trimmed)
+    resized = _resize_for_ocr(normalized)
+    denoised = cv2.fastNlMeansDenoising(resized, None, h=5, templateWindowSize=7, searchWindowSize=21)
+    blurred = cv2.GaussianBlur(denoised, (0, 0), 1.0)
+    sharpened = cv2.addWeighted(denoised, 1.45, blurred, -0.45, 0)
+    return _add_white_border(sharpened)
+
+
 def _prepare_strong(gray: np.ndarray) -> np.ndarray:
     # Keep the retry variant conservative. The previous aggressive thresholding
     # improved a few missed lines but hurt character shapes on clean typewritten
@@ -119,6 +131,7 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
 
     Modes:
     - basic: deskew + contrast normalization + upscale
+    - receipt: thermal receipt crop + conservative contrast/sharpening
     - strong: stronger denoise + thresholding + border cleanup
     """
     img = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
@@ -129,6 +142,9 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
 
     if mode == "basic":
         out = _prepare_basic(gray)
+
+    elif mode == "receipt":
+        out = _prepare_receipt(gray)
 
     elif mode == "strong":
         out = _prepare_strong(gray)
@@ -146,6 +162,8 @@ def preprocess_document_pages(pages_dir: Path, processed_dir: Path, mode: str = 
 
     Output goes to:
       processed_dir/<mode>/page_XXXX.png
+
+    Supported modes are basic, receipt, and strong.
     """
     manifest_path = pages_dir / "manifest.json"
     if not manifest_path.exists():

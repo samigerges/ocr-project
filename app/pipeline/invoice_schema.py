@@ -4,6 +4,7 @@ from typing import Any, TypedDict
 
 
 class LineItem(TypedDict, total=False):
+    item_code: str
     description: str
     quantity: float | int | None
     unit_price: float | None
@@ -22,6 +23,9 @@ class InvoiceFields(TypedDict):
     tax: float | None
     discount: float | None
     total_amount: float | None
+    total_quantity: float | int | None
+    cash_received: float | None
+    change_amount: float | None
     currency: str
     payment_method: str | None
     line_items: list[LineItem]
@@ -42,6 +46,9 @@ EMPTY_INVOICE: InvoiceFields = {
     "tax": None,
     "discount": None,
     "total_amount": None,
+    "total_quantity": None,
+    "cash_received": None,
+    "change_amount": None,
     "currency": "unknown",
     "payment_method": None,
     "line_items": [],

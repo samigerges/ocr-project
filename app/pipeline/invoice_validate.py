@@ -31,6 +31,8 @@ def calculate_confidence(fields: InvoiceFields, arithmetic_valid: bool) -> float
         score += 0.10
     if fields.get("line_items"):
         score += 0.10
+    if fields.get("total_quantity") is not None or fields.get("cash_received") is not None:
+        score += 0.05
     if arithmetic_valid:
         score += 0.10
     return clamp_confidence(score)
@@ -66,10 +68,30 @@ def validate_invoice_fields(fields: InvoiceFields, *, extra_review_reasons: list
 
     line_items = fields.get("line_items") or []
     line_amounts = [item.get("amount") for item in line_items if item.get("amount") is not None]
-    if subtotal is not None and line_amounts:
+    if line_amounts:
         line_sum = sum(float(amount) for amount in line_amounts if amount is not None)
-        if not approximately_equal(float(subtotal), line_sum, LINE_SUM_TOLERANCE):
+        if subtotal is not None and not approximately_equal(float(subtotal), line_sum, LINE_SUM_TOLERANCE):
             reasons.add("line_items_subtotal_mismatch")
+            arithmetic_valid = False
+        elif subtotal is None and total is not None and len(line_amounts) >= 2:
+            if not approximately_equal(float(total), line_sum, LINE_SUM_TOLERANCE):
+                reasons.add("line_items_total_mismatch")
+                arithmetic_valid = False
+
+    total_quantity = fields.get("total_quantity")
+    line_quantities = [item.get("quantity") for item in line_items if item.get("quantity") is not None]
+    if total_quantity is not None and line_quantities:
+        quantity_sum = sum(float(quantity) for quantity in line_quantities if quantity is not None)
+        if not approximately_equal(float(total_quantity), quantity_sum, LINE_SUM_TOLERANCE):
+            reasons.add("line_items_quantity_mismatch")
+            arithmetic_valid = False
+
+    cash_received = fields.get("cash_received")
+    change_amount = fields.get("change_amount")
+    if total is not None and cash_received is not None and change_amount is not None:
+        expected_change = float(cash_received) - float(total)
+        if not approximately_equal(float(change_amount), expected_change, MONEY_TOLERANCE):
+            reasons.add("cash_change_mismatch")
             arithmetic_valid = False
 
     fields["confidence"] = calculate_confidence(fields, arithmetic_valid)
@@ -83,6 +105,9 @@ def validate_invoice_fields(fields: InvoiceFields, *, extra_review_reasons: list
         "ambiguous_date_format",
         "total_mismatch",
         "line_items_subtotal_mismatch",
+        "line_items_total_mismatch",
+        "line_items_quantity_mismatch",
+        "cash_change_mismatch",
     }
     fields["needs_review"] = fields["confidence"] < 0.75 or bool(reasons & blocking_reasons)
     fields["review_reasons"] = sorted(reasons)

@@ -250,14 +250,59 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
     return vendor_name, "\n".join(address_lines) or None, buyer_name
 
 
+def _normalize_quantity(value: float | None) -> float | int | None:
+    if value is None:
+        return None
+    return int(value) if float(value).is_integer() else value
+
+
+def _parse_receipt_code_row(line: str) -> LineItem | None:
+    parts = line.split()
+    if len(parts) < 5 or not re.fullmatch(r"\d{3,}", parts[0]):
+        return None
+    quantity = parse_amount(parts[1])
+    numeric_values = [parse_amount(part) for part in parts[2:]]
+    numeric_values = [value for value in numeric_values if value is not None]
+    if len(numeric_values) < 2:
+        return None
+    return {
+        "item_code": parts[0],
+        "description": parts[0],
+        "quantity": _normalize_quantity(quantity),
+        "unit_price": numeric_values[0],
+        "amount": numeric_values[-1],
+    }
+
+
+def _finalize_receipt_item(items: list[LineItem], pending: LineItem | None) -> None:
+    if not pending:
+        return
+    description = (pending.get("description") or pending.get("item_code") or "").strip()
+    if len(description) < 3:
+        return
+    pending["description"] = description
+    items.append(pending)
+
+
 def extract_line_items(text: str) -> list[LineItem]:
-    """Parse simple invoice item rows after a table header without treating metadata as items."""
+    """Parse invoice/receipt table rows and group receipt code rows with following descriptions."""
     items: list[LineItem] = []
     in_items = False
-    header_pattern = re.compile(r"\b(description|item|service|product)\b.*\b(qty|quantity|unit|price|amount)\b", re.I)
-    stop_pattern = re.compile(r"\b(subtotal|sub total|total|tax|discount|balance|amount due|payment)\b", re.I)
-    metadata_pattern = re.compile(r"\b(invoice|date|due|bill to|ship to|customer|client|address)\b", re.I)
-
+    pending_receipt_item: LineItem | None = None
+    header_pattern = re.compile(
+        r"\b(description|code/?desc|item|service|product)\b.*\b(qty|quantity|unit|price|amount|s/price)\b",
+        re.I,
+    )
+    stop_pattern = re.compile(
+        r"\b(subtotal|sub total|total\s+qty|total\s+sales|grand\s+total|total|tax|discount|"
+        r"balance|amount due|payment|cash|change|rounding)\b",
+        re.I,
+    )
+    metadata_pattern = re.compile(
+        r"\b(invoice|date|due|bill to|ship to|customer|client|address|cashier|salesperson|"
+        r"ref\.?|tel|fax|gst\s*id)\b",
+        re.I,
+    )
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -267,10 +312,31 @@ def extract_line_items(text: str) -> list[LineItem]:
             continue
         if stop_pattern.search(line):
             if in_items:
+                _finalize_receipt_item(items, pending_receipt_item)
+                pending_receipt_item = None
                 break
             continue
         if not in_items or metadata_pattern.search(line):
             continue
+
+        receipt_item = _parse_receipt_code_row(line)
+        if receipt_item:
+            _finalize_receipt_item(items, pending_receipt_item)
+            pending_receipt_item = receipt_item
+            continue
+
+        if pending_receipt_item:
+            line_amounts = [parse_amount(amount) for amount in re.findall(AMOUNT_TOKEN, line)]
+            line_amounts = [amount for amount in line_amounts if amount is not None]
+            last_token_is_amount = parse_amount(line.split()[-1]) is not None if line.split() else False
+            looks_like_amount_row = len(line_amounts) >= 2 and last_token_is_amount
+            if not looks_like_amount_row:
+                previous_description = pending_receipt_item.get("description") or ""
+                if previous_description == pending_receipt_item.get("item_code"):
+                    pending_receipt_item["description"] = line
+                else:
+                    pending_receipt_item["description"] = f"{previous_description} {line}".strip()
+                continue
 
         amounts = re.findall(AMOUNT_TOKEN, line)
         if not amounts:
@@ -287,13 +353,35 @@ def extract_line_items(text: str) -> list[LineItem]:
         row_match = re.match(r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+" + AMOUNT_TOKEN + r"\s+" + AMOUNT_TOKEN + r"$", line)
         if row_match:
             description = row_match.group(1).strip()
-            quantity_value = parse_amount(row_match.group(2))
-            quantity = int(quantity_value) if quantity_value is not None and quantity_value.is_integer() else quantity_value
+            quantity = _normalize_quantity(parse_amount(row_match.group(2)))
         else:
             description = re.sub(re.escape(amounts[-1]) + r"\s*$", "", line).strip(" -|\t")
         if description and len(description) >= 3:
             items.append({"description": description, "quantity": quantity, "unit_price": unit_price, "amount": amount})
+
+    _finalize_receipt_item(items, pending_receipt_item)
     return items[:100]
+
+
+def detect_document_type(text: str) -> str:
+    if re.search(r"\bCASH\s+(SALES|BILL)\b|\bRECEIPT\b", text, flags=re.I):
+        return "cash_sales_receipt"
+    return "invoice"
+
+
+def extract_total_quantity(text: str) -> float | int | None:
+    match = re.search(r"\bTotal\s+Qty\b\s*[:#-]?\s*(\d+(?:[.,]\d+)?)", text, flags=re.I)
+    if not match:
+        return None
+    return _normalize_quantity(parse_amount(match.group(1)))
+
+
+def extract_cash_received(text: str) -> float | None:
+    return _extract_labeled_amount(text, ["Cash", "Cash Received", "Tendered"])
+
+
+def extract_change_amount(text: str) -> float | None:
+    return _extract_labeled_amount(text, ["Change", "Balance Change"])
 
 
 def extract_payment_method(text: str) -> str | None:
@@ -312,6 +400,7 @@ def extract_payment_method(text: str) -> str | None:
 def extract_invoice_fields(text: str) -> InvoiceFields:
     fields = empty_invoice_fields()
     lines = text.splitlines()
+    fields["document_type"] = detect_document_type(text)
     fields["invoice_number"] = extract_invoice_number(text)
     prefer_day_first = _is_malaysian_receipt(text)
     invoice_date, ambiguous_invoice = _extract_labeled_date(
@@ -326,6 +415,9 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     fields["tax"] = _extract_labeled_amount(text, ["Tax", "VAT", "Sales Tax", "GST Amount"])
     fields["discount"] = _extract_labeled_amount(text, ["Discount"])
     fields["total_amount"] = extract_total_amount(text)
+    fields["total_quantity"] = extract_total_quantity(text)
+    fields["cash_received"] = extract_cash_received(text)
+    fields["change_amount"] = extract_change_amount(text)
     fields["currency"] = detect_currency(text)
     fields["payment_method"] = extract_payment_method(text)
     fields["line_items"] = extract_line_items(text)
