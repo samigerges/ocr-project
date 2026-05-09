@@ -56,7 +56,10 @@ def process_document_job(doc_id: str) -> dict:
     _set_progress("preprocess_basic", 25, "Preprocessing OCR pages (basic)")
     preprocess_document_pages(pages_dir, processed_dir, mode="basic")
 
-    # 4) preprocess strong retry variant
+    # 4) preprocess thermal receipt + strong retry variants
+    _set_progress("preprocess_receipt", 35, "Preparing thermal receipt preprocess variant")
+    preprocess_document_pages(pages_dir, processed_dir, mode="receipt")
+
     _set_progress("preprocess_strong", 40, "Preparing retry preprocess variant")
     preprocess_document_pages(pages_dir, processed_dir, mode="strong")
 

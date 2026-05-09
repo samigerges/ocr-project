@@ -103,7 +103,7 @@ def should_retry_page(page_result: dict, confidence_threshold: float) -> bool:
     return False
 
 
-def choose_better_result(result_a: dict, result_b: dict) -> tuple[str, dict]:
+def choose_better_result(result_a: dict, result_b: dict, *, name_a: str = "basic", name_b: str = "strong") -> tuple[str, dict]:
     """
     Compare two OCR page results and return:
       (winner_name, winner_result)
@@ -114,12 +114,12 @@ def choose_better_result(result_a: dict, result_b: dict) -> tuple[str, dict]:
     score_b = page_quality_score(result_b)
 
     if conf_b >= conf_a + 0.01:
-        return "strong", result_b
+        return name_b, result_b
 
     if conf_b >= conf_a - 0.005 and score_b > score_a + 0.02:
-        return "strong", result_b
+        return name_b, result_b
 
-    return "basic", result_a
+    return name_a, result_a
 
 
 def run_ocr_with_retry_for_page(
@@ -132,7 +132,7 @@ def run_ocr_with_retry_for_page(
     """
     OCR a page using:
     1) basic preprocess first
-    2) retry with strong preprocess when confidence or text heuristics look weak
+    2) retry with receipt and strong preprocess variants when confidence or text heuristics look weak
 
     Returns:
       final_page_result, metadata
@@ -156,24 +156,32 @@ def run_ocr_with_retry_for_page(
     if not should_retry_page(basic_result, confidence_threshold):
         return basic_result, meta
 
-    strong_img = processed_dir / "strong" / image_name
-    if not strong_img.exists():
-        return basic_result, meta
+    winner_name = "basic"
+    winner_result = basic_result
+    meta["retry_used"] = True
 
-    strong_result = run_ocr_on_image(strong_img, lang=lang)
-    strong_conf = page_average_confidence(strong_result)
-    winner_name, winner_result = choose_better_result(basic_result, strong_result)
+    for mode in ("receipt", "strong"):
+        retry_img = processed_dir / mode / image_name
+        if not retry_img.exists():
+            continue
 
-    meta.update(
-        {
-            "retry_used": True,
-            "strong_confidence": strong_conf,
-            "strong_quality_score": page_quality_score(strong_result),
-            "strong_suspicious_lines": page_suspicious_line_count(strong_result),
-            "selected_mode": winner_name,
-        }
-    )
+        retry_result = run_ocr_on_image(retry_img, lang=lang)
+        retry_conf = page_average_confidence(retry_result)
+        meta.update(
+            {
+                f"{mode}_confidence": retry_conf,
+                f"{mode}_quality_score": page_quality_score(retry_result),
+                f"{mode}_suspicious_lines": page_suspicious_line_count(retry_result),
+            }
+        )
+        winner_name, winner_result = choose_better_result(
+            winner_result,
+            retry_result,
+            name_a=winner_name,
+            name_b=mode,
+        )
 
+    meta["selected_mode"] = winner_name
     return winner_result, meta
 
 
@@ -227,7 +235,7 @@ def run_ocr_from_manifest(
 
     Uses:
       processed/basic/page_XXXX.png first
-      then retries with processed/strong/page_XXXX.png if needed
+      then retries with processed/receipt and processed/strong variants if needed
 
     Saves chosen per-page OCR JSON into ocr_dir.
     """

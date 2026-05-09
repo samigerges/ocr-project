@@ -161,12 +161,13 @@ def get_processed_image(doc_id: str, mode: str, filename: str):
     Return processed page image for a given preprocess mode.
     Example:
       /v1/documents/{doc_id}/processed/basic/page_0001.png
+      /v1/documents/{doc_id}/processed/receipt/page_0001.png
       /v1/documents/{doc_id}/processed/strong/page_0001.png
     """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    if mode not in {"basic", "strong"}:
+    if mode not in {"basic", "receipt", "strong"}:
         raise HTTPException(status_code=400, detail="Invalid preprocess mode")
 
     allowed = {".png", ".jpg", ".jpeg", ".webp"}

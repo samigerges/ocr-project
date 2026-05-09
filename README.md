@@ -57,7 +57,7 @@ Render
    │
    ▼
 Preprocess
-(Basic / Strong)
+(Basic / Receipt / Strong)
    │
    ▼
 OCR
@@ -68,8 +68,12 @@ Post-processing
 (Text assembly)
    │
    ▼
+Invoice/Receipt extraction
+(Fields + line items + validation)
+   │
+   ▼
 Results
-(JSON + TXT)
+(JSON + TXT + invoice_fields.json)
 ```
 
 ---
@@ -78,8 +82,8 @@ Results
 
 * Upload **PDF or image documents**
 * Automatic **PDF page rendering**
-* Multiple **image preprocessing strategies**
-* **Retry OCR pipeline** if confidence is low
+* Multiple **image preprocessing strategies**, including a thermal receipt mode
+* **Retry OCR pipeline** if confidence is low and compare basic/receipt/strong variants
 * **Layout-aware text assembly**
 * **Pipeline visualization UI**
 * Asynchronous processing with **Redis + RQ**
@@ -204,6 +208,22 @@ GET /v1/documents/{doc_id}/pages/{filename}
 Used by the UI to visualize the processing pipeline.
 
 ---
+
+
+# Invoice and Receipt Extraction
+
+After OCR assembly, the pipeline extracts structured invoice fields and persists them to
+`out/invoice_fields.json`. The extractor includes receipt-specific logic for thermal
+cash-sales layouts like Malaysian receipts:
+
+* detects `cash_sales_receipt` documents from `CASH SALES`, `CASH BILL`, or `RECEIPT` text
+* normalizes Malaysian day-first dates such as `11/01/2019` to `2019-01-11`
+* groups item-code rows with following description lines
+* extracts receipt totals including `Total Qty`, `Total Sales`, `CASH`, and `Change`
+* validates line-item amount totals, quantity totals, and cash/change arithmetic
+
+The OCR retry metadata records which preprocess variant was selected for each page, so
+you can inspect whether `basic`, `receipt`, or `strong` produced the best text.
 
 # Running the Project
 
