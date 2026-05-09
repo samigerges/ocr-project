@@ -19,6 +19,10 @@ def ensure_doc_dirs(doc_id: str) -> None:
     (base / "pages").mkdir(parents=True, exist_ok=True)
     (base / "processed").mkdir(parents=True, exist_ok=True)
     (base / "ocr").mkdir(parents=True, exist_ok=True)
+    (base / "layout").mkdir(parents=True, exist_ok=True)
+    (base / "extracted").mkdir(parents=True, exist_ok=True)
+    (base / "validation").mkdir(parents=True, exist_ok=True)
+    (base / "quality").mkdir(parents=True, exist_ok=True)
 
 
 def original_path(doc_id: str, filename: str) -> Path:

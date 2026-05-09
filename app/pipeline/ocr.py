@@ -141,7 +141,7 @@ def run_ocr_with_retry_for_page(
     if not basic_img.exists():
         raise FileNotFoundError(f"Missing basic preprocessed image: {basic_img}")
 
-    basic_result = run_ocr_on_image(basic_img, lang=lang)
+    basic_result = run_ocr_on_image(basic_img, lang=lang, page_no=page_no)
     basic_conf = page_average_confidence(basic_result)
 
     meta = {
@@ -165,7 +165,7 @@ def run_ocr_with_retry_for_page(
         if not retry_img.exists():
             continue
 
-        retry_result = run_ocr_on_image(retry_img, lang=lang)
+        retry_result = run_ocr_on_image(retry_img, lang=lang, page_no=page_no)
         retry_conf = page_average_confidence(retry_result)
         meta.update(
             {
@@ -185,7 +185,7 @@ def run_ocr_with_retry_for_page(
     return winner_result, meta
 
 
-def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
+def run_ocr_on_image(image_path: Path, lang: str = "en", page_no: int = 1) -> dict:
     """
     Run PaddleOCR on a single image and return structured result.
     Output: {"lines": [{"text": str, "confidence": float, "bbox": list}, ...]}
@@ -216,6 +216,8 @@ def run_ocr_on_image(image_path: Path, lang: str = "en") -> dict:
                 "text": str(text),
                 "confidence": float(conf),
                 "bbox": box,
+                "page": page_no,
+                "line_id": f"p{page_no:04d}_l{len(lines) + 1:04d}",
             }
         )
 
@@ -255,8 +257,14 @@ def run_ocr_from_manifest(
             results[page_no] = {
                 "source": "native",
                 "lines": [
-                    {"text": line, "confidence": 1.0, "bbox": None}
-                    for line in text.splitlines()
+                    {
+                        "text": line,
+                        "confidence": 1.0,
+                        "bbox": None,
+                        "page": page_no,
+                        "line_id": f"p{page_no:04d}_l{index:04d}",
+                    }
+                    for index, line in enumerate(text.splitlines(), start=1)
                     if line.strip()
                 ],
             }

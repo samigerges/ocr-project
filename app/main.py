@@ -229,3 +229,29 @@ def get_pipeline_view(doc_id: str):
         "pages": pages,
     }
 
+
+
+def _read_json_artifact(path: Path, missing_detail: str):
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=missing_detail)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/v1/documents/{doc_id}/quality")
+def get_quality_report(doc_id: str):
+    return _read_json_artifact(doc_dir(doc_id) / "quality" / "report.json", "Quality report not ready yet")
+
+
+@app.get("/v1/documents/{doc_id}/layout")
+def get_receipt_layout(doc_id: str):
+    return _read_json_artifact(doc_dir(doc_id) / "layout" / "sections.json", "Layout sections not ready yet")
+
+
+@app.get("/v1/documents/{doc_id}/receipt")
+def get_receipt_fields(doc_id: str):
+    return _read_json_artifact(doc_dir(doc_id) / "extracted" / "receipt.json", "Receipt fields not ready yet")
+
+
+@app.get("/v1/documents/{doc_id}/validation")
+def get_validation_report(doc_id: str):
+    return _read_json_artifact(doc_dir(doc_id) / "validation" / "report.json", "Validation report not ready yet")
