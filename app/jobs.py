@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from rq import get_current_job
 
@@ -9,6 +10,7 @@ from app.pipeline.ocr import run_ocr_from_manifest
 from app.pipeline.postprocess import postprocess_ocr_dir
 from app.pipeline.llm_refine import refine_ocr_dir
 from app.pipeline.assemble import assemble_results
+from app.pipeline.invoice_extract import extract_invoice_from_result
 
 
 def _set_progress(stage: str, progress: int, message: str = ""):
@@ -74,8 +76,23 @@ def process_document_job(doc_id: str) -> dict:
     refine_ocr_dir(post_dir, llm_dir)
 
     # 8) assemble
-    _set_progress("assemble", 95, "Assembling final outputs")
+    _set_progress("assemble", 92, "Assembling final outputs")
     result = assemble_results(doc_id, pages_dir, llm_dir, out_dir)
 
+    # 9) invoice extraction
+    _set_progress("invoice_extract", 97, "Extracting structured invoice fields")
+    invoice_fields = extract_invoice_from_result(doc_id, result, out_dir)
+    result["invoice_fields"] = invoice_fields
+    (out_dir / "result.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     _set_progress("done", 100, "Done")
-    return {"doc_id": doc_id, "out_dir": str(out_dir), "full_text_len": len(result.get("full_text", ""))}
+    return {
+        "doc_id": doc_id,
+        "out_dir": str(out_dir),
+        "full_text_len": len(result.get("full_text", "")),
+        "invoice_confidence": invoice_fields.get("confidence"),
+        "invoice_needs_review": invoice_fields.get("needs_review"),
+    }

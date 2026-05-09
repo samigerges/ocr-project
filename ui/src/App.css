@@ -201,3 +201,91 @@
   overflow: auto;
   font-size: 13px;
 }
+.invoice-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.review-badge,
+.confidence-pill {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.review-badge.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.review-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.confidence-pill {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.invoice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.invoice-field {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fafafa;
+}
+
+.invoice-label {
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.invoice-value {
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.review-reasons {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+}
+
+.review-reasons ul {
+  margin: 8px 0 0 20px;
+}
+
+.line-items-wrap {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+
+.line-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.line-items-table th,
+.line-items-table td {
+  border: 1px solid #e5e7eb;
+  padding: 10px;
+  text-align: left;
+}
+
+.line-items-table th {
+  background: #f3f4f6;
+}

@@ -10,6 +10,7 @@ export default function App() {
   const [pipeline, setPipeline] = useState(null);
   const [resultText, setResultText] = useState("");
   const [resultJson, setResultJson] = useState(null);
+  const invoiceFields = resultJson?.invoice_fields || null;
   const [error, setError] = useState("");
   const [isUploading, setIsUploading] = useState(false);
 
@@ -269,14 +270,90 @@ export default function App() {
           </section>
         )}
 
+
+        {invoiceFields && (
+          <section className="card">
+            <h2 className="section-title">4) Invoice Extraction</h2>
+            <div className="invoice-header">
+              <span
+                className={
+                  invoiceFields.needs_review ? "review-badge warning" : "review-badge success"
+                }
+              >
+                {invoiceFields.needs_review ? "Needs review" : "Validated"}
+              </span>
+              <span className="confidence-pill">
+                Confidence: {formatConfidence(invoiceFields.confidence)}
+              </span>
+            </div>
+
+            <div className="invoice-grid">
+              <Field label="Vendor" value={invoiceFields.vendor_name} />
+              <Field label="Invoice #" value={invoiceFields.invoice_number} />
+              <Field label="Invoice Date" value={invoiceFields.invoice_date} />
+              <Field label="Due Date" value={invoiceFields.due_date} />
+              <Field label="Subtotal" value={formatMoney(invoiceFields.subtotal, invoiceFields.currency)} />
+              <Field label="Tax" value={formatMoney(invoiceFields.tax, invoiceFields.currency)} />
+              <Field label="Total" value={formatMoney(invoiceFields.total_amount, invoiceFields.currency)} />
+              <Field label="Currency" value={invoiceFields.currency} />
+            </div>
+
+            {invoiceFields.review_reasons?.length > 0 && (
+              <div className="review-reasons">
+                <strong>Review reasons:</strong>
+                <ul>
+                  {invoiceFields.review_reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {invoiceFields.line_items?.length > 0 && (
+              <div className="line-items-wrap">
+                <h3>Line Items</h3>
+                <table className="line-items-table">
+                  <thead>
+                    <tr>
+                      <th>Description</th>
+                      <th>Qty</th>
+                      <th>Unit Price</th>
+                      <th>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoiceFields.line_items.map((item, index) => (
+                      <tr key={`${item.description}-${index}`}>
+                        <td>{item.description || "-"}</td>
+                        <td>{item.quantity ?? "-"}</td>
+                        <td>{formatMoney(item.unit_price, invoiceFields.currency)}</td>
+                        <td>{formatMoney(item.amount, invoiceFields.currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
         {resultText && (
           <section className="card">
-            <h2 className="section-title">4) Extracted Text</h2>
+            <h2 className="section-title">5) Extracted Text</h2>
             <pre className="text-box">{resultText}</pre>
           </section>
         )}
 
       </div>
+    </div>
+  );
+}
+
+function Field({ label, value }) {
+  return (
+    <div className="invoice-field">
+      <div className="invoice-label">{label}</div>
+      <div className="invoice-value">{value ?? "-"}</div>
     </div>
   );
 }
@@ -305,4 +382,14 @@ async function safeErrorMessage(res) {
   } catch {
     return "";
   }
+}
+function formatConfidence(value) {
+  if (typeof value !== "number") return "-";
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatMoney(value, currency) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  const prefix = currency && currency !== "unknown" ? `${currency} ` : "";
+  return `${prefix}${Number(value).toFixed(2)}`;
 }

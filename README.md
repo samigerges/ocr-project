@@ -259,3 +259,90 @@ This project demonstrates:
 
 ---
 
+
+---
+
+# Invoice Extraction Layer
+
+After the existing OCR assemble stage, the worker now runs a local-first invoice extraction layer. The original OCR flow is preserved, and the invoice layer reads the assembled `full_text`, extracts structured fields with deterministic rules, validates the result, and writes JSON artifacts.
+
+Updated pipeline:
+
+```
+upload
+-> render/native-text routing
+-> preprocess basic
+-> preprocess strong
+-> OCR with retry
+-> postprocess
+-> LLM refine
+-> assemble
+-> invoice field extraction
+-> invoice validation
+-> invoice_fields.json
+-> final API/UI display
+```
+
+Invoice artifacts are saved in both locations for convenient API and storage-first inspection:
+
+```
+storage/<doc_id>/invoice/invoice_fields.json
+storage/<doc_id>/out/invoice_fields.json
+```
+
+The invoice extractor uses regex and rules for invoice numbers, dates, totals, subtotal, tax, discounts, currency, vendor/buyer clues, payment methods, and simple table-like line items. Validation lowers confidence and marks `needs_review` when required fields are missing, ambiguous dates are detected, currency is unknown, or totals do not reconcile.
+
+## Invoice API
+
+Existing endpoints continue to work. `GET /v1/documents/{doc_id}/result` now includes `invoice_fields` when available. A dedicated endpoint is also available:
+
+```
+GET /v1/documents/{doc_id}/invoice
+```
+
+## Example `invoice_fields.json`
+
+```json
+{
+  "doc_id": "example-doc-id",
+  "document_type": "invoice",
+  "vendor_name": "Acme Supplies LLC",
+  "vendor_address": "123 Market Street",
+  "buyer_name": "Beta Co",
+  "invoice_number": "INV-1001",
+  "invoice_date": "2026-05-09",
+  "due_date": "2026-05-30",
+  "subtotal": 100.0,
+  "tax": 10.0,
+  "discount": 5.0,
+  "total_amount": 105.0,
+  "currency": "USD",
+  "payment_method": "bank transfer",
+  "line_items": [
+    {
+      "description": "Consulting",
+      "quantity": 2,
+      "unit_price": 50.0,
+      "amount": 100.0
+    }
+  ],
+  "confidence": 1.0,
+  "needs_review": false,
+  "review_reasons": []
+}
+```
+
+## Invoice Evaluation
+
+A lightweight evaluation harness is available under `evaluation/`. Add document IDs and expected values to `evaluation/ground_truth.csv`, ensure each document has an extracted `invoice_fields.json` in `storage/<doc_id>/`, then run:
+
+```
+python evaluation/run_invoice_evaluation.py
+```
+
+The script writes:
+
+```
+evaluation/reports/invoice_evaluation_summary.json
+evaluation/reports/invoice_evaluation_summary.csv
+```
