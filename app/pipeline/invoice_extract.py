@@ -10,7 +10,7 @@ from app.pipeline.invoice_schema import InvoiceFields, LineItem, empty_invoice_f
 from app.pipeline.invoice_validate import validate_invoice_fields
 
 CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
-CURRENCY_CODES = {"USD", "EUR", "GBP", "EGP", "AED", "SAR", "CAD", "AUD", "JPY", "CHF", "INR"}
+CURRENCY_CODES = {"USD", "EUR", "GBP", "EGP", "AED", "SAR", "CAD", "AUD", "JPY", "CHF", "INR", "MYR"}
 MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
 
 AMOUNT_TOKEN = r"(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d{1,3}(?:[,.]\d{3})*(?:[,.]\d{2})?|(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d+(?:[,.]\d{2})?"
@@ -63,7 +63,7 @@ def parse_amount(raw: str | None) -> float | None:
     return -amount if negative else amount
 
 
-def parse_invoice_date(raw: str | None) -> tuple[str | None, bool]:
+def parse_invoice_date(raw: str | None, *, prefer_day_first: bool = False) -> tuple[str | None, bool]:
     """Return an ISO date when safe; otherwise preserve ambiguous raw date."""
     if not raw:
         return None, False
@@ -83,6 +83,8 @@ def parse_invoice_date(raw: str | None) -> tuple[str | None, bool]:
             return datetime(yyyy, b, a).date().isoformat(), False
         if b > 12 and a <= 12:
             return datetime(yyyy, a, b).date().isoformat(), False
+        if prefer_day_first:
+            return datetime(yyyy, b, a).date().isoformat(), False
         return text, True
     return text, False
 
@@ -92,6 +94,7 @@ def extract_invoice_number(text: str) -> str | None:
         r"\bInvoice\s*(?:No\.?|Number|#|ID)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
         r"\bInv\s*(?:No\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
         r"\bBill\s*(?:No\.?|#)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
+        r"\bDoc(?:ument)?\s*(?:No\.?|Number|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.I)
@@ -100,28 +103,36 @@ def extract_invoice_number(text: str) -> str | None:
     return None
 
 
-def _extract_labeled_date(text: str, labels: Iterable[str]) -> tuple[str | None, bool]:
+def _is_malaysian_receipt(text: str) -> bool:
+    return bool(re.search(r"\b(RM|MYR|SDN\.?\s*BHD|JOHOR|KUALA\s+LUMPUR|GST\s*ID)\b", text, flags=re.I))
+
+
+def _extract_labeled_date(text: str, labels: Iterable[str], *, prefer_day_first: bool = False) -> tuple[str | None, bool]:
     date_pattern = rf"(\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}|\d{{1,2}}\s+(?:{MONTHS})\s+\d{{4}}|(?:{MONTHS})\s+\d{{1,2}},\s*\d{{4}})"
     label_pattern = "|".join(re.escape(label) for label in labels)
-    match = re.search(rf"\b(?:{label_pattern})\b\s*[:#-]?\s*{date_pattern}", text, flags=re.I)
+    match = re.search(rf"\b(?:{label_pattern})\b[ \t]*[:#-]?[ \t]*{date_pattern}", text, flags=re.I)
     if not match:
         return None, False
-    return parse_invoice_date(match.group(1))
+    return parse_invoice_date(match.group(1), prefer_day_first=prefer_day_first)
 
 
 def detect_currency(text: str) -> str:
     for symbol, code in CURRENCY_SYMBOLS.items():
         if symbol in text:
             return code
+    if re.search(r"\bRM\b|\(RM\)", text, flags=re.I):
+        return "MYR"
     for code in CURRENCY_CODES:
         if re.search(rf"\b{code}\b", text, flags=re.I):
             return code
+    if _is_malaysian_receipt(text):
+        return "MYR"
     return "unknown"
 
 
 def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
     label_pattern = "|".join(re.escape(label) for label in labels)
-    matches = re.finditer(rf"\b(?:{label_pattern})\b\s*[:#-]?\s*({AMOUNT_TOKEN})", text, flags=re.I)
+    matches = re.finditer(rf"\b(?:{label_pattern})\b[ \t]*[:#-]?[ \t]*({AMOUNT_TOKEN})", text, flags=re.I)
     amounts = [parse_amount(match.group(1)) for match in matches]
     amounts = [amount for amount in amounts if amount is not None]
     if not amounts:
@@ -129,13 +140,94 @@ def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
     return amounts[-1]
 
 
+def extract_total_amount(text: str) -> float | None:
+    """Find the payable receipt total while ignoring cash/change and metadata totals."""
+    priorities = [
+        (re.compile(r"\b(round(?:ed)?\s+total|total\s+sales|grand\s+total|amount\s+due|invoice\s+total|total\s+amount)\b", re.I), 3),
+        (re.compile(r"\btotal\b", re.I), 1),
+    ]
+    blocked = re.compile(r"\b(total\s+qty|change|cash|discount|subtotal|sub\s+total|tax|gst\s*id|rounding)\b", re.I)
+    candidates: list[tuple[int, float]] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or blocked.search(line):
+            continue
+        score = 0
+        for pattern, priority in priorities:
+            if pattern.search(line):
+                score = max(score, priority)
+        if not score:
+            continue
+        amounts = [parse_amount(amount) for amount in re.findall(AMOUNT_TOKEN, line)]
+        amounts = [amount for amount in amounts if amount is not None]
+        if amounts:
+            candidates.append((score, amounts[-1]))
+
+    if not candidates:
+        return _extract_labeled_amount(text, ["Total Amount", "Amount Due", "Balance Due", "Grand Total", "Invoice Total", "Total"])
+
+    best_score = max(score for score, _ in candidates)
+    best_amounts = [amount for score, amount in candidates if score == best_score]
+    non_zero = [amount for amount in best_amounts if amount != 0]
+    return non_zero[-1] if non_zero else best_amounts[-1]
+
+
+def _looks_like_company_name(line: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(SDN\.?\s*BHD|BHD|ENTERPRISE|TRADING|MACHINERY|BOOK|STORE|MART|RESTAURANT|SUPPLIES|LLC|LTD|INC|CO\.?|COMPANY)\b",
+            line,
+            flags=re.I,
+        )
+    )
+
+
+def _has_company_suffix(line: str) -> bool:
+    return bool(
+        re.search(r"\b(SDN\.?\s*BHD|BHD|ENTERPRISE|LLC|LTD|INC|CO\.?|COMPANY)\b", line, flags=re.I)
+    )
+
+
+def _is_metadata_or_address(line: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(invoice|date|doc(?:ument)?\s*no|cash\s+(?:sales|bill)|bill to|ship to|total|receipt|tel|fax|gst\s*id|no\.?\s*\d|jalan|taman|johor|bahru|barcode)\b",
+            line,
+            flags=re.I,
+        )
+    )
+
+
 def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None, str | None]:
     cleaned = [line.strip() for line in lines if line.strip()]
     vendor_name = None
-    for line in cleaned[:8]:
-        if not re.search(r"invoice|date|bill to|ship to|total|receipt", line, re.I):
-            vendor_name = line
+    vendor_start = 0
+    vendor_end = 0
+    for idx, line in enumerate(cleaned[:10]):
+        if _looks_like_company_name(line):
+            vendor_start = idx
+            vendor_end = idx
+            vendor_parts = [line]
+            if not _has_company_suffix(line):
+                for next_offset, next_line in enumerate(cleaned[idx + 1 : idx + 3], start=idx + 1):
+                    if _is_metadata_or_address(next_line):
+                        break
+                    candidate = " ".join(vendor_parts + [next_line])
+                    if _looks_like_company_name(candidate) or re.fullmatch(r"[A-Z&(). -]{2,}", next_line):
+                        vendor_end = next_offset
+                        vendor_parts.append(next_line)
+                        if _has_company_suffix(candidate):
+                            break
+            vendor_name = " ".join(vendor_parts)
             break
+    if not vendor_name:
+        for line in cleaned[:8]:
+            if not _is_metadata_or_address(line):
+                vendor_start = cleaned.index(line)
+                vendor_end = vendor_start
+                vendor_name = line
+                break
 
     buyer_name = None
     for idx, line in enumerate(cleaned):
@@ -149,11 +241,11 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
 
     address_lines: list[str] = []
     if vendor_name:
-        start = cleaned.index(vendor_name) + 1
+        start = vendor_end + 1
         for line in cleaned[start : start + 4]:
             if re.search(r"invoice|bill to|date|total|subtotal", line, re.I):
                 break
-            if re.search(r"\d|street|st\.?|road|rd\.?|ave|avenue|city|egypt|usa|zip", line, re.I):
+            if re.search(r"\d|street|st\.?|road|rd\.?|ave|avenue|city|egypt|usa|zip|jalan|taman|johor|bahru", line, re.I):
                 address_lines.append(line)
     return vendor_name, "\n".join(address_lines) or None, buyer_name
 
@@ -221,14 +313,19 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     fields = empty_invoice_fields()
     lines = text.splitlines()
     fields["invoice_number"] = extract_invoice_number(text)
-    invoice_date, ambiguous_invoice = _extract_labeled_date(text, ["Invoice Date", "Date", "Issued", "Issue Date"])
-    due_date, ambiguous_due = _extract_labeled_date(text, ["Due Date", "Payment Due", "Due"])
+    prefer_day_first = _is_malaysian_receipt(text)
+    invoice_date, ambiguous_invoice = _extract_labeled_date(
+        text, ["Invoice Date", "Date", "Issued", "Issue Date"], prefer_day_first=prefer_day_first
+    )
+    due_date, ambiguous_due = _extract_labeled_date(
+        text, ["Due Date", "Payment Due", "Due"], prefer_day_first=prefer_day_first
+    )
     fields["invoice_date"] = invoice_date
     fields["due_date"] = due_date
     fields["subtotal"] = _extract_labeled_amount(text, ["Subtotal", "Sub Total", "Net Amount"])
-    fields["tax"] = _extract_labeled_amount(text, ["Tax", "VAT", "Sales Tax", "GST"])
+    fields["tax"] = _extract_labeled_amount(text, ["Tax", "VAT", "Sales Tax", "GST Amount"])
     fields["discount"] = _extract_labeled_amount(text, ["Discount"])
-    fields["total_amount"] = _extract_labeled_amount(text, ["Total Amount", "Amount Due", "Balance Due", "Grand Total", "Invoice Total", "Total"])
+    fields["total_amount"] = extract_total_amount(text)
     fields["currency"] = detect_currency(text)
     fields["payment_method"] = extract_payment_method(text)
     fields["line_items"] = extract_line_items(text)
