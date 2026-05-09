@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import PlainTextResponse, FileResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from rq.job import Job
 
@@ -88,15 +88,6 @@ def get_invoice_fields(doc_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Invoice fields not ready yet")
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-@app.get("/v1/documents/{doc_id}/text", response_class=PlainTextResponse)
-def get_result_text(doc_id: str):
-    out_dir = doc_dir(doc_id) / "out"
-    txt_path = out_dir / "result.txt"
-    if not txt_path.exists():
-        raise HTTPException(status_code=404, detail="Result not ready yet")
-    return txt_path.read_text(encoding="utf-8")
 
 
 @app.get("/v1/documents/{doc_id}/original")
@@ -193,40 +184,6 @@ def get_ocr_page_result(doc_id: str, page_no: int):
 
     return json.loads(path.read_text(encoding="utf-8"))
 
-@app.get("/v1/documents/{doc_id}/llm/{page_no}")
-def get_llm_page_result(doc_id: str, page_no: int):
-    """
-    Return LLM refined JSON for one page.
-    """
-    path = doc_dir(doc_id) / "llm" / f"page_{page_no:04d}.json"
-
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="LLM page result not found")
-
-    return json.loads(path.read_text(encoding="utf-8"))
-
-@app.get("/v1/documents/{doc_id}/llm")
-def get_llm_results(doc_id: str):
-    """
-    Return all LLM refined pages.
-    """
-    llm_dir = doc_dir(doc_id) / "llm"
-
-    if not llm_dir.exists():
-        raise HTTPException(status_code=404, detail="LLM results not ready")
-
-    pages = sorted(llm_dir.glob("page_*.json"))
-
-    results = []
-
-    for p in pages:
-        results.append(json.loads(p.read_text(encoding="utf-8")))
-
-    return {
-        "doc_id": doc_id,
-        "pages": results,
-    }
-
 @app.get("/v1/documents/{doc_id}/pipeline")
 def get_pipeline_view(doc_id: str):
     """
@@ -238,7 +195,6 @@ def get_pipeline_view(doc_id: str):
     processed_basic_dir = base / "processed" / "basic"
     processed_strong_dir = base / "processed" / "strong"
     ocr_dir = base / "ocr"
-    llm_dir = base / "llm"
 
     manifest_path = pages_dir / "manifest.json"
 
@@ -265,7 +221,6 @@ def get_pipeline_view(doc_id: str):
             "processed_basic": artifact if (processed_basic_dir / artifact).exists() else None,
             "processed_strong": artifact if (processed_strong_dir / artifact).exists() else None,
             "ocr_result_exists": (ocr_dir / f"page_{page_no:04d}.json").exists(),
-            "llm_result_exists": (llm_dir / f"page_{page_no:04d}.json").exists(),
         }
         pages.append(page_info)
 

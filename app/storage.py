@@ -27,7 +27,3 @@ def original_path(doc_id: str, filename: str) -> Path:
 
 def result_json_path(doc_id: str) -> Path:
     return doc_dir(doc_id) / "result.json"
-
-
-def result_txt_path(doc_id: str) -> Path:
-    return doc_dir(doc_id) / "result.txt"
