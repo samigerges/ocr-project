@@ -6,11 +6,14 @@ os.environ["FLAGS_enable_pir_api"] = "0"
 os.environ["FLAGS_use_new_executor"] = "0"
 
 from pathlib import Path
+import tarfile
 import json
 import re
 from typing import Optional
 
 from paddleocr import PaddleOCR
+
+from app.pipeline.paddle_cache import remove_corrupt_paddleocr_archives
 
 # Lazy singleton (important: prevents uvicorn reload crashes on model download)
 _OCR_ENGINE: Optional[PaddleOCR] = None
@@ -26,7 +29,17 @@ def get_ocr_engine(lang: str = "en") -> PaddleOCR:
 
     if _OCR_ENGINE is None or _OCR_LANG != lang:
         # If you later add Arabic/mixed routing, you can re-init with lang="ar" etc.
-        _OCR_ENGINE = PaddleOCR(use_angle_cls=True, lang=lang)
+        remove_corrupt_paddleocr_archives()
+        try:
+            _OCR_ENGINE = PaddleOCR(use_angle_cls=True, lang=lang)
+        except tarfile.TarError:
+            # A model download can be interrupted after the pre-flight cache scan.
+            # PaddleOCR treats the partial .tar as cached, so remove it and retry
+            # once to force a clean download.
+            removed = remove_corrupt_paddleocr_archives()
+            if not removed:
+                raise
+            _OCR_ENGINE = PaddleOCR(use_angle_cls=True, lang=lang)
         _OCR_LANG = lang
 
     return _OCR_ENGINE
