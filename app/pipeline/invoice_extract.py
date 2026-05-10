@@ -10,7 +10,20 @@ from app.pipeline.invoice_schema import InvoiceFields, LineItem, empty_invoice_f
 from app.pipeline.invoice_validate import validate_invoice_fields
 
 CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
-CURRENCY_CODES = {"USD", "EUR", "GBP", "EGP", "AED", "SAR", "CAD", "AUD", "JPY", "CHF", "INR", "MYR"}
+CURRENCY_CODES = {
+    "USD",
+    "EUR",
+    "GBP",
+    "EGP",
+    "AED",
+    "SAR",
+    "CAD",
+    "AUD",
+    "JPY",
+    "CHF",
+    "INR",
+    "MYR",
+}
 MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec"
 
 AMOUNT_TOKEN = r"(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d{1,3}(?:[,.]\d{3})*(?:[,.]\d{2})?|(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d+(?:[,.]\d{2})?"
@@ -65,7 +78,7 @@ def _label_to_regex(label: str) -> str:
     parts: list[str] = []
     for char in label:
         if char.isspace():
-            parts.append(r"\s+")
+            parts.append(r"\s*")
         elif char == ".":
             parts.append(r"\.?")
         else:
@@ -74,7 +87,14 @@ def _label_to_regex(label: str) -> str:
 
 
 def _label_pattern(labels: Iterable[str]) -> str:
-    return "|".join(_label_to_regex(label) for label in sorted(labels, key=len, reverse=True))
+    return "|".join(
+        _label_to_regex(label) for label in sorted(labels, key=len, reverse=True)
+    )
+
+
+def _label_prefix_pattern(labels: Iterable[str]) -> str:
+    """Return an OCR-tolerant label pattern that may be glued to its value."""
+    return rf"(?<!\w)(?:{_label_pattern(labels)})\.?[ \t]*[:#-]?[ \t]*"
 
 
 def parse_amount(raw: str | None) -> float | None:
@@ -82,7 +102,9 @@ def parse_amount(raw: str | None) -> float | None:
     if not raw:
         return None
     value = raw.strip()
-    value = re.sub(r"\b(?:USD|EUR|GBP|EGP|AED|SAR|CAD|AUD|JPY|CHF|INR)\b", "", value, flags=re.I)
+    value = re.sub(
+        r"\b(?:USD|EUR|GBP|EGP|AED|SAR|CAD|AUD|JPY|CHF|INR)\b", "", value, flags=re.I
+    )
     value = re.sub(r"[$€£¥]", "", value).strip()
     value = value.replace(" ", "")
     value = re.sub(r"[^0-9,.-]", "", value)
@@ -124,7 +146,9 @@ def parse_amount(raw: str | None) -> float | None:
     return -amount if negative else amount
 
 
-def parse_invoice_date(raw: str | None, *, prefer_day_first: bool = False) -> tuple[str | None, bool]:
+def parse_invoice_date(
+    raw: str | None, *, prefer_day_first: bool = False
+) -> tuple[str | None, bool]:
     """Return an ISO date when safe; otherwise preserve ambiguous raw date."""
     if not raw:
         return None, False
@@ -151,34 +175,48 @@ def parse_invoice_date(raw: str | None, *, prefer_day_first: bool = False) -> tu
 
 
 def extract_invoice_number(text: str) -> str | None:
-    label_pattern = _label_pattern(INVOICE_NUMBER_LABEL_ALIASES)
     value_pattern = r"([A-Z0-9][A-Z0-9._/-]{2,})"
     for line in text.splitlines():
-        match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*{value_pattern}", line.strip(), flags=re.I)
+        match = re.search(
+            rf"{_label_prefix_pattern(INVOICE_NUMBER_LABEL_ALIASES)}{value_pattern}",
+            line.strip(),
+            flags=re.I,
+        )
         if match:
             return match.group(1).strip().rstrip(".,")
     return None
 
 
 def _is_malaysian_receipt(text: str) -> bool:
-    return bool(re.search(r"\b(RM|MYR|SDN\.?\s*BHD|JOHOR|KUALA\s+LUMPUR|GST\s*ID)\b", text, flags=re.I))
+    return bool(
+        re.search(
+            r"\b(RM|MYR|SDN\.?\s*BHD|JOHOR|KUALA\s+LUMPUR)\b|(?<!\w)GST\s*ID",
+            text,
+            flags=re.I,
+        )
+    )
 
 
-def _extract_labeled_date(text: str, labels: Iterable[str], *, prefer_day_first: bool = False) -> tuple[str | None, bool]:
+def _extract_labeled_date(
+    text: str, labels: Iterable[str], *, prefer_day_first: bool = False
+) -> tuple[str | None, bool]:
     date_pattern = rf"(\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}|\d{{1,2}}\s+(?:{MONTHS})\s+\d{{4}}|(?:{MONTHS})\s+\d{{1,2}},\s*\d{{4}})"
-    label_pattern = _label_pattern(labels)
-    match = re.search(rf"\b(?:{label_pattern})\b\.?[ \t]*[:#-]?[ \t]*{date_pattern}", text, flags=re.I)
+    match = re.search(
+        rf"{_label_prefix_pattern(labels)}{date_pattern}", text, flags=re.I
+    )
     if not match:
         return None, False
     return parse_invoice_date(match.group(1), prefer_day_first=prefer_day_first)
 
 
-
-def _extract_labeled_text(text: str, labels: Iterable[str], *, max_length: int = 120) -> str | None:
+def _extract_labeled_text(
+    text: str, labels: Iterable[str], *, max_length: int = 120
+) -> str | None:
     """Extract short single-line metadata values such as cashier, GST ID, and references."""
-    label_pattern = _label_pattern(labels)
     for line in text.splitlines():
-        match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*(.+)", line.strip(), flags=re.I)
+        match = re.search(
+            rf"{_label_prefix_pattern(labels)}(.+)", line.strip(), flags=re.I
+        )
         if match:
             value = match.group(1).strip().strip("|;,")
             if value:
@@ -186,13 +224,21 @@ def _extract_labeled_text(text: str, labels: Iterable[str], *, max_length: int =
     return None
 
 
-def _extract_inline_labeled_text(text: str, label: str, *, stop_labels: Iterable[str] = (), max_length: int = 120) -> str | None:
+def _extract_inline_labeled_text(
+    text: str, label: str, *, stop_labels: Iterable[str] = (), max_length: int = 120
+) -> str | None:
     """Extract metadata that can appear beside another label on the same receipt line."""
-    stop_pattern = "|".join(re.escape(stop_label).rstrip(r"\.") + r"\.?" for stop_label in stop_labels)
+    stop_pattern = "|".join(
+        re.escape(stop_label).rstrip(r"\.") + r"\.?" for stop_label in stop_labels
+    )
     suffix = rf"(?=\s*(?:{stop_pattern})\s*[:#-]?|$)" if stop_pattern else r"$"
     label_pattern = re.escape(label).rstrip(r"\.") + r"\.?"
     for line in text.splitlines():
-        match = re.search(rf"(?<!\w){label_pattern}\s*[:#-]?\s*(.*?){suffix}", line.strip(), flags=re.I)
+        match = re.search(
+            rf"(?<!\w){label_pattern}\s*[:#-]?\s*(.*?){suffix}",
+            line.strip(),
+            flags=re.I,
+        )
         if match:
             value = " ".join(match.group(1).split()).strip().strip("|;,")
             if value:
@@ -203,7 +249,9 @@ def _extract_inline_labeled_text(text: str, label: str, *, stop_labels: Iterable
 def extract_document_title(text: str) -> str | None:
     for line in text.splitlines():
         cleaned = line.strip()
-        if re.fullmatch(r"CASH\s+(?:SALES|BILL)|(?:TAX\s+)?INVOICE|RECEIPT", cleaned, flags=re.I):
+        if re.fullmatch(
+            r"CASH\s+(?:SALES|BILL)|(?:TAX\s+)?INVOICE|RECEIPT", cleaned, flags=re.I
+        ):
             return cleaned.upper()
     return None
 
@@ -231,31 +279,48 @@ def extract_contact_details(text: str) -> tuple[str | None, str | None, str | No
     for line in text.splitlines():
         cleaned = line.strip()
         if not phone:
-            tel_match = re.search(r"\b(?:TEL|PHONE)\b\s*[:#-]?\s*(.*?)(?=\s+FAX\b|$)", cleaned, flags=re.I)
+            tel_match = re.search(
+                r"(?<!\w)(?:TEL|PHONE)\.?\s*[:#-]?\s*(.*?)(?=\s*FAX\.?\s*[:#-]?|$)",
+                cleaned,
+                flags=re.I,
+            )
             if tel_match:
                 phone = tel_match.group(1).strip().strip("|;,") or None
         if not fax:
-            fax_match = re.search(r"\bFAX\b\s*[:#-]?\s*(.+)", cleaned, flags=re.I)
+            fax_match = re.search(r"FAX\.?\s*[:#-]?\s*(.+)", cleaned, flags=re.I)
             if fax_match:
                 fax = fax_match.group(1).strip().strip("|;,") or None
     return phone, fax, email
 
 
 def extract_transaction_time(text: str) -> str | None:
-    match = re.search(r"\bTime\b\s*[:#-]?\s*(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)", text, flags=re.I)
+    match = re.search(
+        r"(?<!\w)Time\.?\s*[:#-]?\s*(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)",
+        text,
+        flags=re.I,
+    )
     return match.group(1).strip() if match else None
 
 
 def extract_cashier(text: str) -> str | None:
-    return _extract_inline_labeled_text(text, "Cashier", stop_labels=["Time", "Date", "Salesperson", "Ref.", "Ref"], max_length=80)
+    return _extract_inline_labeled_text(
+        text,
+        "Cashier",
+        stop_labels=["Time", "Date", "Salesperson", "Ref.", "Ref"],
+        max_length=80,
+    )
 
 
 def extract_salesperson(text: str) -> str | None:
-    return _extract_inline_labeled_text(text, "Salesperson", stop_labels=["Ref.", "Ref", "Time", "Date"], max_length=80)
+    return _extract_inline_labeled_text(
+        text, "Salesperson", stop_labels=["Ref.", "Ref", "Time", "Date"], max_length=80
+    )
 
 
 def extract_reference(text: str) -> str | None:
-    return _extract_inline_labeled_text(text, "Ref.", stop_labels=["Time", "Date"], max_length=80) or _extract_inline_labeled_text(
+    return _extract_inline_labeled_text(
+        text, "Ref.", stop_labels=["Time", "Date"], max_length=80
+    ) or _extract_inline_labeled_text(
         text, "Ref", stop_labels=["Time", "Date"], max_length=80
     )
 
@@ -276,7 +341,11 @@ def detect_currency(text: str) -> str:
 
 def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
     label_pattern = _label_pattern(labels)
-    matches = re.finditer(rf"\b(?:{label_pattern})\b\.?[ \t]*[:#-]?[ \t]*({AMOUNT_TOKEN})", text, flags=re.I)
+    matches = re.finditer(
+        rf"\b(?:{label_pattern})\b\.?[ \t]*[:#-]?[ \t]*({AMOUNT_TOKEN})",
+        text,
+        flags=re.I,
+    )
     amounts = [parse_amount(match.group(1)) for match in matches]
     amounts = [amount for amount in amounts if amount is not None]
     if not amounts:
@@ -286,14 +355,19 @@ def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
 
 def extract_total_amount(text: str) -> float | None:
     """Find the payable receipt total while ignoring cash/change and metadata totals."""
-    high_priority_total_labels = [label for label in TOTAL_AMOUNT_LABEL_ALIASES if label != "Total"]
+    high_priority_total_labels = [
+        label for label in TOTAL_AMOUNT_LABEL_ALIASES if label != "Total"
+    ]
     high_priority_total_pattern = _label_pattern(high_priority_total_labels)
     generic_total_pattern = _label_pattern(["Total"])
     priorities = [
         (re.compile(rf"\b(?:{high_priority_total_pattern})\b", re.I), 3),
         (re.compile(rf"\b(?:{generic_total_pattern})\b", re.I), 1),
     ]
-    blocked = re.compile(r"\b(total\s+qty|change|cash|discount|subtotal|sub\s+total|tax|gst\s*id|rounding)\b", re.I)
+    blocked = re.compile(
+        r"\b(total\s+qty|change|cash|discount|subtotal|sub\s+total|tax|gst\s*id|rounding)\b",
+        re.I,
+    )
     candidates: list[tuple[int, float]] = []
 
     for raw_line in text.splitlines():
@@ -332,7 +406,11 @@ def _looks_like_company_name(line: str) -> bool:
 
 def _has_company_suffix(line: str) -> bool:
     return bool(
-        re.search(r"\b(SDN\.?\s*BHD|BHD|ENTERPRISE|LLC|LTD|INC|CO\.?|COMPANY)\b", line, flags=re.I)
+        re.search(
+            r"\b(SDN\.?\s*BHD|BHD|ENTERPRISE|LLC|LTD|INC|CO\.?|COMPANY)\b",
+            line,
+            flags=re.I,
+        )
     )
 
 
@@ -346,7 +424,9 @@ def _is_metadata_or_address(line: str) -> bool:
     )
 
 
-def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None, str | None]:
+def _extract_vendor_and_buyer(
+    lines: list[str],
+) -> tuple[str | None, str | None, str | None]:
     cleaned = [line.strip() for line in lines if line.strip()]
     vendor_name = None
     vendor_start = 0
@@ -357,11 +437,15 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
             vendor_end = idx
             vendor_parts = [line]
             if not _has_company_suffix(line):
-                for next_offset, next_line in enumerate(cleaned[idx + 1 : idx + 3], start=idx + 1):
+                for next_offset, next_line in enumerate(
+                    cleaned[idx + 1 : idx + 3], start=idx + 1
+                ):
                     if _is_metadata_or_address(next_line):
                         break
                     candidate = " ".join(vendor_parts + [next_line])
-                    if _looks_like_company_name(candidate) or re.fullmatch(r"[A-Z&(). -]{2,}", next_line):
+                    if _looks_like_company_name(candidate) or re.fullmatch(
+                        r"[A-Z&(). -]{2,}", next_line
+                    ):
                         vendor_end = next_offset
                         vendor_parts.append(next_line)
                         if _has_company_suffix(candidate):
@@ -379,7 +463,12 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
     buyer_name = None
     for idx, line in enumerate(cleaned):
         if re.search(r"\b(?:bill to|billed to|customer|client|buyer)\b", line, re.I):
-            trailing = re.sub(r".*?(?:bill to|billed to|customer|client|buyer)\s*[:#-]?\s*", "", line, flags=re.I).strip()
+            trailing = re.sub(
+                r".*?(?:bill to|billed to|customer|client|buyer)\s*[:#-]?\s*",
+                "",
+                line,
+                flags=re.I,
+            ).strip()
             if trailing and trailing.lower() != line.lower():
                 buyer_name = trailing
             elif idx + 1 < len(cleaned):
@@ -390,11 +479,19 @@ def _extract_vendor_and_buyer(lines: list[str]) -> tuple[str | None, str | None,
     if vendor_name:
         start = vendor_end + 1
         for line in cleaned[start : start + 6]:
-            if re.search(r"invoice|bill to|date|total|subtotal|cash\s+(?:sales|bill)|tel|fax|gst\s*id|@", line, re.I):
+            if re.search(
+                r"invoice|bill to|date|total|subtotal|cash\s+(?:sales|bill)|tel|fax|gst\s*id|@",
+                line,
+                re.I,
+            ):
                 break
             if extract_vendor_registration_number(line):
                 continue
-            if re.search(r"\d|street|st\.?|road|rd\.?|ave|avenue|city|egypt|usa|zip|jalan|taman|johor|bahru", line, re.I):
+            if re.search(
+                r"\d|street|st\.?|road|rd\.?|ave|avenue|city|egypt|usa|zip|jalan|taman|johor|bahru",
+                line,
+                re.I,
+            ):
                 address_lines.append(line)
     return vendor_name, "\n".join(address_lines) or None, buyer_name
 
@@ -406,21 +503,77 @@ def _normalize_quantity(value: float | None) -> float | int | None:
 
 
 def _parse_receipt_code_row(line: str) -> LineItem | None:
+    """Parse receipt item rows even when OCR column order is reversed or shifted."""
     parts = line.split()
-    if len(parts) < 5 or not re.fullmatch(r"\d{3,}", parts[0]):
+    code_indexes = [
+        index for index, part in enumerate(parts) if re.fullmatch(r"\d{3,}", part)
+    ]
+    if not code_indexes or len(code_indexes) > 1:
         return None
-    quantity = parse_amount(parts[1])
-    numeric_values = [parse_amount(part) for part in parts[2:]]
-    numeric_values = [value for value in numeric_values if value is not None]
-    if len(numeric_values) < 2:
-        return None
-    return {
-        "item_code": parts[0],
-        "description": parts[0],
-        "quantity": _normalize_quantity(quantity),
-        "unit_price": numeric_values[0],
-        "amount": numeric_values[-1],
-    }
+
+    for code_index in code_indexes:
+        code = parts[code_index]
+        before = [parse_amount(part) for part in parts[:code_index]]
+        after = [parse_amount(part) for part in parts[code_index + 1 :]]
+        before = [value for value in before if value is not None]
+        after = [value for value in after if value is not None]
+        quantity: float | int | None = None
+        unit_price: float | None = None
+        amount: float | None = None
+
+        if code_index == 0 and len(after) >= 3:
+            quantity = _normalize_quantity(after[0])
+            unit_price = after[1]
+            amount = after[-1]
+        elif before and after:
+            amount = before[0]
+            if len(before) >= 3 and len(after) == 1:
+                # Example OCR order: "10.00 10.00 10.00 70791 1".
+                quantity = _normalize_quantity(after[0])
+                unit_price = before[-1]
+            elif len(before) >= 2:
+                # Example OCR order: "36.00 2 70561 18.00 18.00".
+                quantity = _normalize_quantity(before[1])
+                unit_price = after[0]
+            else:
+                # Example OCR order: "17.00 1071 1".
+                quantity = _normalize_quantity(after[0])
+                unit_price = amount
+        elif len(before) >= 3:
+            amount = before[0]
+            if len(before) >= 4:
+                # Example OCR order: "6.00 6.00 6.00 1 70637".
+                quantity = _normalize_quantity(before[-1])
+                unit_price = before[-2]
+            elif before[0] == before[1] == before[2]:
+                # Example OCR order with omitted quantity: "160.00 160.00 160.00 70549".
+                quantity = 1
+                unit_price = before[-1]
+            elif float(before[1]).is_integer() and before[1] <= 999:
+                # Example OCR order: "80.00 1 80.00 1072".
+                quantity = _normalize_quantity(before[1])
+                unit_price = before[2]
+            else:
+                quantity = 1
+                unit_price = before[-1]
+        elif len(before) >= 2:
+            # Example OCR order: "17.00 1071 1" has the code in the middle.
+            amount = before[0]
+            quantity = _normalize_quantity(before[1]) if len(before) > 1 else 1
+            unit_price = amount
+
+        if amount is None or unit_price is None:
+            continue
+        if quantity is None:
+            quantity = 1
+        return {
+            "item_code": code,
+            "description": code,
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "amount": amount,
+        }
+    return None
 
 
 def _finalize_receipt_item(items: list[LineItem], pending: LineItem | None) -> None:
@@ -439,7 +592,7 @@ def extract_line_items(text: str) -> list[LineItem]:
     in_items = False
     pending_receipt_item: LineItem | None = None
     header_pattern = re.compile(
-        r"\b(description|code/?desc|item|service|product)\b.*\b(qty|quantity|unit|price|amount|s/price)\b",
+        r"(?=.*\b(description|code/?desc|item|service|product)\b)(?=.*\b(qty|quantity|unit|price|amount|s/price)\b)",
         re.I,
     )
     stop_pattern = re.compile(
@@ -473,22 +626,38 @@ def extract_line_items(text: str) -> list[LineItem]:
             _finalize_receipt_item(items, pending_receipt_item)
             pending_receipt_item = receipt_item
             continue
+        if len(re.findall(r"\b\d{3,}\b", line)) > 1:
+            continue
 
         if pending_receipt_item:
-            line_amounts = [parse_amount(amount) for amount in re.findall(AMOUNT_TOKEN, line)]
+            line_amounts = [
+                parse_amount(amount) for amount in re.findall(AMOUNT_TOKEN, line)
+            ]
             line_amounts = [amount for amount in line_amounts if amount is not None]
-            last_token_is_amount = parse_amount(line.split()[-1]) is not None if line.split() else False
-            looks_like_amount_row = len(line_amounts) >= 2 and last_token_is_amount
+            last_token_is_amount = (
+                parse_amount(line.split()[-1]) is not None if line.split() else False
+            )
+            looks_like_amount_row = (
+                len(line_amounts) >= 2
+                and last_token_is_amount
+                and not re.search(r"[A-Z]{2,}", line, re.I)
+            )
             if not looks_like_amount_row:
                 previous_description = pending_receipt_item.get("description") or ""
                 if previous_description == pending_receipt_item.get("item_code"):
                     pending_receipt_item["description"] = line
                 else:
-                    pending_receipt_item["description"] = f"{previous_description} {line}".strip()
+                    pending_receipt_item["description"] = (
+                        f"{previous_description} {line}".strip()
+                    )
                 continue
 
         amounts = re.findall(AMOUNT_TOKEN, line)
         if not amounts:
+            continue
+        if re.fullmatch(r"[\d.,\s$€£¥A-Z-]+", line) and not re.search(
+            r"[A-Z]{2,}", line
+        ):
             continue
         numeric_amounts = [parse_amount(amount) for amount in amounts]
         numeric_amounts = [amount for amount in numeric_amounts if amount is not None]
@@ -497,16 +666,34 @@ def extract_line_items(text: str) -> list[LineItem]:
 
         amount = numeric_amounts[-1]
         quantity: float | int | None = None
-        unit_price: float | None = numeric_amounts[-2] if len(numeric_amounts) >= 2 else None
+        unit_price: float | None = (
+            numeric_amounts[-2] if len(numeric_amounts) >= 2 else None
+        )
         description = line
-        row_match = re.match(r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+" + AMOUNT_TOKEN + r"\s+" + AMOUNT_TOKEN + r"$", line)
-        if row_match:
+        row_match = re.match(
+            r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+"
+            + AMOUNT_TOKEN
+            + r"\s+"
+            + AMOUNT_TOKEN
+            + r"$",
+            line,
+        )
+        if row_match and row_match.group(1):
             description = row_match.group(1).strip()
             quantity = _normalize_quantity(parse_amount(row_match.group(2)))
         else:
-            description = re.sub(re.escape(amounts[-1]) + r"\s*$", "", line).strip(" -|\t")
+            description = re.sub(re.escape(amounts[-1]) + r"\s*$", "", line).strip(
+                " -|\t"
+            )
         if description and len(description) >= 3:
-            items.append({"description": description, "quantity": quantity, "unit_price": unit_price, "amount": amount})
+            items.append(
+                {
+                    "description": description,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "amount": amount,
+                }
+            )
 
     _finalize_receipt_item(items, pending_receipt_item)
     return items[:100]
@@ -520,9 +707,14 @@ def detect_document_type(text: str) -> str:
 
 def extract_total_quantity(text: str) -> float | int | None:
     match = re.search(r"\bTotal\s+Qty\b\s*[:#-]?\s*(\d+(?:[.,]\d+)?)", text, flags=re.I)
-    if not match:
-        return None
-    return _normalize_quantity(parse_amount(match.group(1)))
+    if match:
+        return _normalize_quantity(parse_amount(match.group(1)))
+    reversed_match = re.search(
+        rf"({AMOUNT_TOKEN})\s+(\d+(?:[.,]\d+)?)\s+Total\s+Qty\b", text, flags=re.I
+    )
+    if reversed_match:
+        return _normalize_quantity(parse_amount(reversed_match.group(2)))
+    return None
 
 
 def extract_cash_received(text: str) -> float | None:
@@ -584,16 +776,23 @@ def _line_with_layout(line: dict[str, Any], index: int) -> dict[str, Any] | None
 
 def _normalize_layout_lines(lines: list[dict]) -> list[dict[str, Any]]:
     normalized = [_line_with_layout(line, index) for index, line in enumerate(lines)]
-    return sorted((line for line in normalized if line), key=lambda line: (line["page"], line["top"], line["left"]))
+    return sorted(
+        (line for line in normalized if line),
+        key=lambda line: (line["page"], line["top"], line["left"]),
+    )
 
 
 def _layout_text(lines: list[dict[str, Any]]) -> str:
     return "\n".join(line["text"] for line in lines if line.get("text"))
 
 
-def _label_value_from_same_line(text: str, labels: Iterable[str], value_pattern: str = r"(.+)") -> str | None:
+def _label_value_from_same_line(
+    text: str, labels: Iterable[str], value_pattern: str = r"(.+)"
+) -> str | None:
     label_pattern = _label_pattern(labels)
-    match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*{value_pattern}", text, flags=re.I)
+    match = re.search(
+        rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*{value_pattern}", text, flags=re.I
+    )
     if match:
         value = match.group(1).strip().strip("|;,")
         return value or None
@@ -605,15 +804,33 @@ def _looks_like_label(text: str) -> bool:
         INVOICE_NUMBER_LABEL_ALIASES,
         INVOICE_DATE_LABEL_ALIASES,
         TOTAL_AMOUNT_LABEL_ALIASES,
-        ("Due Date", "Payment Due", "Due", "Subtotal", "Sub Total", "Tax", "VAT", "Discount", "Rounding"),
+        (
+            "Due Date",
+            "Payment Due",
+            "Due",
+            "Subtotal",
+            "Sub Total",
+            "Tax",
+            "VAT",
+            "Discount",
+            "Rounding",
+        ),
     )
-    return any(re.search(rf"\b(?:{_label_pattern(labels)})\b", text, flags=re.I) for labels in label_groups)
+    return any(
+        re.search(rf"\b(?:{_label_pattern(labels)})\b", text, flags=re.I)
+        for labels in label_groups
+    )
 
 
-def _candidate_to_right(label_line: dict[str, Any], lines: list[dict[str, Any]]) -> str | None:
+def _candidate_to_right(
+    label_line: dict[str, Any], lines: list[dict[str, Any]]
+) -> str | None:
     candidates: list[tuple[float, str]] = []
     for line in lines:
-        if line["line_id"] == label_line["line_id"] or line["page"] != label_line["page"]:
+        if (
+            line["line_id"] == label_line["line_id"]
+            or line["page"] != label_line["page"]
+        ):
             continue
         if line["left"] < label_line["right"] - max(4.0, label_line["height"] * 0.25):
             continue
@@ -630,10 +847,15 @@ def _candidate_to_right(label_line: dict[str, Any], lines: list[dict[str, Any]])
     return min(candidates)[1]
 
 
-def _candidate_below(label_line: dict[str, Any], lines: list[dict[str, Any]]) -> str | None:
+def _candidate_below(
+    label_line: dict[str, Any], lines: list[dict[str, Any]]
+) -> str | None:
     candidates: list[tuple[float, str]] = []
     for line in lines:
-        if line["line_id"] == label_line["line_id"] or line["page"] != label_line["page"]:
+        if (
+            line["line_id"] == label_line["line_id"]
+            or line["page"] != label_line["page"]
+        ):
             continue
         if line["top"] < label_line["bottom"] - max(2.0, label_line["height"] * 0.15):
             continue
@@ -641,7 +863,9 @@ def _candidate_below(label_line: dict[str, Any], lines: list[dict[str, Any]]) ->
         if vertical_gap > label_line["height"] * 3.0:
             continue
         horizontal_offset = abs(line["left"] - label_line["left"])
-        overlap = min(label_line["right"], line["right"]) - max(label_line["left"], line["left"])
+        overlap = min(label_line["right"], line["right"]) - max(
+            label_line["left"], line["left"]
+        )
         if overlap < 0 and horizontal_offset > max(80.0, label_line["width"]):
             continue
         if _looks_like_label(line["text"]):
@@ -653,12 +877,16 @@ def _candidate_below(label_line: dict[str, Any], lines: list[dict[str, Any]]) ->
     return min(candidates)[1]
 
 
-def _extract_layout_labeled_value(lines: list[dict[str, Any]], labels: Iterable[str], *, value_pattern: str = r"(.+)") -> str | None:
+def _extract_layout_labeled_value(
+    lines: list[dict[str, Any]], labels: Iterable[str], *, value_pattern: str = r"(.+)"
+) -> str | None:
     label_pattern = re.compile(rf"\b(?:{_label_pattern(labels)})\b", flags=re.I)
     for line in lines:
         if not label_pattern.search(line["text"]):
             continue
-        inline = _label_value_from_same_line(line["text"], labels, value_pattern=value_pattern)
+        inline = _label_value_from_same_line(
+            line["text"], labels, value_pattern=value_pattern
+        )
         if inline:
             return inline
         right = _candidate_to_right(line, lines)
@@ -679,7 +907,11 @@ def _group_layout_rows(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]
         previous = rows[-1]
         prev_center = sum(item["center_y"] for item in previous) / len(previous)
         prev_height = max(item["height"] for item in previous)
-        if line["page"] == previous[0]["page"] and abs(line["center_y"] - prev_center) <= max(prev_height, line["height"]) * 0.7:
+        if (
+            line["page"] == previous[0]["page"]
+            and abs(line["center_y"] - prev_center)
+            <= max(prev_height, line["height"]) * 0.7
+        ):
             previous.append(line)
         else:
             rows.append([line])
@@ -689,10 +921,14 @@ def _group_layout_rows(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]
 
 
 def _row_text(row: list[dict[str, Any]]) -> str:
-    return " ".join(cell["text"] for cell in sorted(row, key=lambda item: item["left"])).strip()
+    return " ".join(
+        cell["text"] for cell in sorted(row, key=lambda item: item["left"])
+    ).strip()
 
 
 def _infer_header_columns(row: list[dict[str, Any]]) -> dict[str, float]:
+    if len(row) <= 1:
+        return {}
     columns: dict[str, float] = {}
     for cell in row:
         text = cell["text"].lower()
@@ -700,28 +936,42 @@ def _infer_header_columns(row: list[dict[str, Any]]) -> dict[str, float]:
             columns.setdefault("description", cell["center_x"])
         if re.search(r"\bqty\b|quantity", text):
             columns.setdefault("quantity", cell["center_x"])
-        if re.search(r"unit|price|s/price|rate", text) and not re.search(r"amount|total", text):
+        if re.search(r"unit|price|s/price|rate", text) and not re.search(
+            r"amount|total", text
+        ):
             columns.setdefault("unit_price", cell["center_x"])
         if re.search(r"amount|total", text):
             columns.setdefault("amount", cell["center_x"])
     return columns
 
 
-def _assign_cells_to_columns(row: list[dict[str, Any]], columns: dict[str, float]) -> dict[str, str]:
+def _assign_cells_to_columns(
+    row: list[dict[str, Any]], columns: dict[str, float]
+) -> dict[str, str]:
     assigned: dict[str, list[str]] = {name: [] for name in columns}
     ordered_columns = sorted(columns.items(), key=lambda item: item[1])
     for cell in row:
-        nearest = min(ordered_columns, key=lambda item: abs(cell["center_x"] - item[1]))[0]
+        nearest = min(
+            ordered_columns, key=lambda item: abs(cell["center_x"] - item[1])
+        )[0]
         assigned.setdefault(nearest, []).append(cell["text"])
     return {name: " ".join(parts).strip() for name, parts in assigned.items() if parts}
 
 
-def _parse_layout_row_with_columns(row: list[dict[str, Any]], columns: dict[str, float]) -> LineItem | None:
+def _parse_layout_row_with_columns(
+    row: list[dict[str, Any]], columns: dict[str, float]
+) -> LineItem | None:
     text = _row_text(row)
     assigned = _assign_cells_to_columns(row, columns) if columns else {}
     description = assigned.get("description")
-    quantity = _normalize_quantity(parse_amount(assigned.get("quantity"))) if assigned.get("quantity") else None
-    unit_price = parse_amount(assigned.get("unit_price")) if assigned.get("unit_price") else None
+    quantity = (
+        _normalize_quantity(parse_amount(assigned.get("quantity")))
+        if assigned.get("quantity")
+        else None
+    )
+    unit_price = (
+        parse_amount(assigned.get("unit_price")) if assigned.get("unit_price") else None
+    )
     amount = parse_amount(assigned.get("amount")) if assigned.get("amount") else None
 
     if not amount:
@@ -733,23 +983,42 @@ def _parse_layout_row_with_columns(row: list[dict[str, Any]], columns: dict[str,
                 unit_price = amounts[-2]
 
     if not description:
-        row_match = re.match(r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+" + AMOUNT_TOKEN + r"\s+" + AMOUNT_TOKEN + r"$", text)
-        if row_match:
+        row_match = re.match(
+            r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+"
+            + AMOUNT_TOKEN
+            + r"\s+"
+            + AMOUNT_TOKEN
+            + r"$",
+            text,
+        )
+        if row_match and row_match.group(1):
             description = row_match.group(1).strip()
             quantity = _normalize_quantity(parse_amount(row_match.group(2)))
         elif amount is not None:
             amount_tokens = re.findall(AMOUNT_TOKEN, text)
-            description = re.sub(re.escape(amount_tokens[-1]) + r"\s*$", "", text).strip(" -|\t") if amount_tokens else text
+            description = (
+                re.sub(re.escape(amount_tokens[-1]) + r"\s*$", "", text).strip(" -|\t")
+                if amount_tokens
+                else text
+            )
 
     if not description or len(description) < 3 or amount is None:
         return None
-    item: LineItem = {"description": description, "quantity": quantity, "unit_price": unit_price, "amount": amount}
+    item: LineItem = {
+        "description": description,
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "amount": amount,
+    }
     return item
 
 
 def _extract_layout_line_items(lines: list[dict[str, Any]]) -> list[LineItem]:
     rows = _group_layout_rows(lines)
-    header_pattern = re.compile(r"\b(description|code/?desc|item|service|product)\b.*\b(qty|quantity|unit|price|amount|s/price)\b", re.I)
+    header_pattern = re.compile(
+        r"(?=.*\b(description|code/?desc|item|service|product)\b)(?=.*\b(qty|quantity|unit|price|amount|s/price)\b)",
+        re.I,
+    )
     stop_pattern = re.compile(
         r"\b(subtotal|sub total|total\s+qty|total\s+sales|grand\s+total|total|tax|discount|"
         r"balance|amount due|payment|cash|change|rounding)\b",
@@ -769,9 +1038,10 @@ def _extract_layout_line_items(lines: list[dict[str, Any]]) -> list[LineItem]:
             if not row_text:
                 continue
             table_text.append(row_text)
-            item = _parse_layout_row_with_columns(data_row, columns)
-            if item:
-                items.append(item)
+            if columns:
+                item = _parse_layout_row_with_columns(data_row, columns)
+                if item:
+                    items.append(item)
         if items:
             return items[:100]
         fallback_items = extract_line_items("\n".join(table_text))
@@ -783,7 +1053,11 @@ def _extract_layout_line_items(lines: list[dict[str, Any]]) -> list[LineItem]:
 def extract_invoice_fields_from_lines(lines: list[dict]) -> InvoiceFields:
     """Extract invoice fields using OCR line bbox proximity, falling back to text parsing."""
     layout_lines = _normalize_layout_lines(lines)
-    text = _layout_text(layout_lines) if layout_lines else "\n".join(str(line.get("text") or "") for line in lines)
+    text = (
+        _layout_text(layout_lines)
+        if layout_lines
+        else "\n".join(str(line.get("text") or "") for line in lines)
+    )
     fields = extract_invoice_fields(text)
     if not layout_lines:
         return fields
@@ -798,16 +1072,24 @@ def extract_invoice_fields_from_lines(lines: list[dict]) -> InvoiceFields:
         fields["invoice_number"] = invoice_number.strip().rstrip(".,")
 
     date_pattern = rf"(\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}|\d{{1,2}}\s+(?:{MONTHS})\s+\d{{4}}|(?:{MONTHS})\s+\d{{1,2}},\s*\d{{4}})"
-    invoice_date_raw = _extract_layout_labeled_value(layout_lines, INVOICE_DATE_LABEL_ALIASES, value_pattern=date_pattern)
-    due_date_raw = _extract_layout_labeled_value(layout_lines, ["Due Date", "Payment Due", "Due"], value_pattern=date_pattern)
+    invoice_date_raw = _extract_layout_labeled_value(
+        layout_lines, INVOICE_DATE_LABEL_ALIASES, value_pattern=date_pattern
+    )
+    due_date_raw = _extract_layout_labeled_value(
+        layout_lines, ["Due Date", "Payment Due", "Due"], value_pattern=date_pattern
+    )
     extra_reasons: set[str] = set()
     if invoice_date_raw:
-        invoice_date, ambiguous_invoice = parse_invoice_date(invoice_date_raw, prefer_day_first=prefer_day_first)
+        invoice_date, ambiguous_invoice = parse_invoice_date(
+            invoice_date_raw, prefer_day_first=prefer_day_first
+        )
         fields["invoice_date"] = invoice_date
         if ambiguous_invoice:
             extra_reasons.add("ambiguous_date_format")
     if due_date_raw:
-        due_date, ambiguous_due = parse_invoice_date(due_date_raw, prefer_day_first=prefer_day_first)
+        due_date, ambiguous_due = parse_invoice_date(
+            due_date_raw, prefer_day_first=prefer_day_first
+        )
         fields["due_date"] = due_date
         if ambiguous_due:
             extra_reasons.add("ambiguous_date_format")
@@ -820,7 +1102,9 @@ def extract_invoice_fields_from_lines(lines: list[dict]) -> InvoiceFields:
         ("total_amount", TOTAL_AMOUNT_LABEL_ALIASES),
     )
     for field_name, labels in amount_specs:
-        raw_value = _extract_layout_labeled_value(layout_lines, labels, value_pattern=rf"({AMOUNT_TOKEN})")
+        raw_value = _extract_layout_labeled_value(
+            layout_lines, labels, value_pattern=rf"({AMOUNT_TOKEN})"
+        )
         amount = parse_amount(raw_value) if raw_value else None
         if amount is not None:
             fields[field_name] = amount  # type: ignore[literal-required]
@@ -840,8 +1124,13 @@ def extract_invoice_fields_from_lines(lines: list[dict]) -> InvoiceFields:
         "line_items_total_mismatch",
         "line_items_quantity_mismatch",
     }
-    fields["review_reasons"] = [reason for reason in fields.get("review_reasons", []) if reason not in stale_reasons]
+    fields["review_reasons"] = [
+        reason
+        for reason in fields.get("review_reasons", [])
+        if reason not in stale_reasons
+    ]
     return validate_invoice_fields(fields, extra_review_reasons=sorted(extra_reasons))
+
 
 def extract_invoice_fields(text: str) -> InvoiceFields:
     fields = empty_invoice_fields()
@@ -857,10 +1146,16 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     )
     fields["invoice_date"] = invoice_date
     fields["due_date"] = due_date
-    fields["subtotal"] = _extract_labeled_amount(text, ["Subtotal", "Sub Total", "Net Amount"])
-    fields["tax"] = _extract_labeled_amount(text, ["Tax", "VAT", "Sales Tax", "GST Amount"])
+    fields["subtotal"] = _extract_labeled_amount(
+        text, ["Subtotal", "Sub Total", "Net Amount"]
+    )
+    fields["tax"] = _extract_labeled_amount(
+        text, ["Tax", "VAT", "Sales Tax", "GST Amount"]
+    )
     fields["discount"] = _extract_labeled_amount(text, ["Discount"])
-    fields["rounding"] = _extract_labeled_amount(text, ["Rounding", "Rounding Adjustment"])
+    fields["rounding"] = _extract_labeled_amount(
+        text, ["Rounding", "Rounding Adjustment"]
+    )
     fields["total_amount"] = extract_total_amount(text)
     fields["total_quantity"] = extract_total_quantity(text)
     fields["cash_received"] = extract_cash_received(text)
@@ -895,13 +1190,21 @@ def extract_invoice_from_result(
 ) -> InvoiceFields:
     """Run invoice extraction after assemble and persist invoice_fields.json."""
     text = result.get("full_text", "") or ""
-    fields = extract_invoice_fields_from_lines(ocr_lines) if ocr_lines else extract_invoice_fields(text)
+    fields = (
+        extract_invoice_fields_from_lines(ocr_lines)
+        if ocr_lines
+        else extract_invoice_fields(text)
+    )
     invoice_dir = out_dir.parent / "invoice"
     invoice_dir.mkdir(parents=True, exist_ok=True)
     final_dir = out_dir
     final_dir.mkdir(parents=True, exist_ok=True)
     payload = dict(fields)
     payload["doc_id"] = doc_id
-    (invoice_dir / "invoice_fields.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    (final_dir / "invoice_fields.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (invoice_dir / "invoice_fields.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (final_dir / "invoice_fields.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return fields
