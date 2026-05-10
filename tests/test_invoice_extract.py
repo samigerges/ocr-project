@@ -1,4 +1,4 @@
-from app.pipeline.invoice_extract import extract_invoice_fields, extract_invoice_number, parse_amount, parse_invoice_date
+from app.pipeline.invoice_extract import extract_invoice_fields, extract_invoice_fields_from_lines, extract_invoice_number, parse_amount, parse_invoice_date
 
 
 def test_parse_amount_common_formats():
@@ -214,3 +214,33 @@ Amount Payable: USD 1,275.50
     assert fields["invoice_number"] == "REF-2026-118"
     assert fields["invoice_date"] == "2026-04-30"
     assert fields["total_amount"] == 1275.50
+
+
+def test_extract_invoice_fields_from_lines_uses_bbox_label_proximity_and_table_columns():
+    lines = [
+        {"text": "Acme Supplies LLC", "confidence": 0.99, "bbox": [[40, 30], [190, 30], [190, 50], [40, 50]], "page": 1, "line_id": "vendor"},
+        {"text": "Invoice No", "confidence": 0.98, "bbox": [[40, 80], [130, 80], [130, 100], [40, 100]], "page": 1, "line_id": "inv-label"},
+        {"text": "INV-LAYOUT-7", "confidence": 0.97, "bbox": [[170, 80], [290, 80], [290, 100], [170, 100]], "page": 1, "line_id": "inv-value"},
+        {"text": "Invoice Date", "confidence": 0.98, "bbox": [[40, 115], [145, 115], [145, 135], [40, 135]], "page": 1, "line_id": "date-label"},
+        {"text": "2026-05-09", "confidence": 0.97, "bbox": [[40, 145], [145, 145], [145, 165], [40, 165]], "page": 1, "line_id": "date-value"},
+        {"text": "Description", "confidence": 0.99, "bbox": [[40, 220], [150, 220], [150, 240], [40, 240]], "page": 1, "line_id": "h-desc"},
+        {"text": "Qty", "confidence": 0.99, "bbox": [[260, 220], [295, 220], [295, 240], [260, 240]], "page": 1, "line_id": "h-qty"},
+        {"text": "Unit Price", "confidence": 0.99, "bbox": [[340, 220], [430, 220], [430, 240], [340, 240]], "page": 1, "line_id": "h-unit"},
+        {"text": "Amount", "confidence": 0.99, "bbox": [[470, 220], [540, 220], [540, 240], [470, 240]], "page": 1, "line_id": "h-amount"},
+        {"text": "Consulting", "confidence": 0.96, "bbox": [[40, 255], [140, 255], [140, 275], [40, 275]], "page": 1, "line_id": "r1-desc"},
+        {"text": "2", "confidence": 0.96, "bbox": [[270, 255], [280, 255], [280, 275], [270, 275]], "page": 1, "line_id": "r1-qty"},
+        {"text": "50.00", "confidence": 0.96, "bbox": [[355, 255], [410, 255], [410, 275], [355, 275]], "page": 1, "line_id": "r1-unit"},
+        {"text": "100.00", "confidence": 0.96, "bbox": [[480, 255], [540, 255], [540, 275], [480, 275]], "page": 1, "line_id": "r1-amount"},
+        {"text": "Total Amount", "confidence": 0.98, "bbox": [[330, 310], [445, 310], [445, 330], [330, 330]], "page": 1, "line_id": "total-label"},
+        {"text": "USD 105.00", "confidence": 0.97, "bbox": [[470, 310], [560, 310], [560, 330], [470, 330]], "page": 1, "line_id": "total-value"},
+    ]
+
+    fields = extract_invoice_fields_from_lines(lines)
+
+    assert fields["invoice_number"] == "INV-LAYOUT-7"
+    assert fields["invoice_date"] == "2026-05-09"
+    assert fields["total_amount"] == 105.00
+    assert fields["line_items"] == [{"description": "Consulting", "quantity": 2, "unit_price": 50.00, "amount": 100.00}]
+    assert "missing_invoice_number" not in fields["review_reasons"]
+    assert "missing_invoice_date" not in fields["review_reasons"]
+    assert "missing_total_amount" not in fields["review_reasons"]

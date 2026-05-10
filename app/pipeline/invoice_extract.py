@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.pipeline.invoice_schema import InvoiceFields, LineItem, empty_invoice_fields
 from app.pipeline.invoice_validate import validate_invoice_fields
@@ -546,6 +546,303 @@ def extract_payment_method(text: str) -> str | None:
     return None
 
 
+def _line_bbox_bounds(line: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    bbox = line.get("bbox")
+    if not bbox or len(bbox) < 4:
+        return None
+    try:
+        xs = [float(point[0]) for point in bbox]
+        ys = [float(point[1]) for point in bbox]
+    except (TypeError, ValueError, IndexError):
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _line_with_layout(line: dict[str, Any], index: int) -> dict[str, Any] | None:
+    text = str(line.get("text_clean") or line.get("text") or "").strip()
+    bounds = _line_bbox_bounds(line)
+    if not text or bounds is None:
+        return None
+    left, top, right, bottom = bounds
+    page = int(line.get("page") or 1)
+    return {
+        "text": text,
+        "confidence": float(line.get("confidence", 0.0) or 0.0),
+        "bbox": line.get("bbox"),
+        "page": page,
+        "line_id": line.get("line_id") or f"p{page}-l{index}",
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "center_x": (left + right) / 2.0,
+        "center_y": (top + bottom) / 2.0,
+        "height": max(bottom - top, 1.0),
+        "width": max(right - left, 1.0),
+    }
+
+
+def _normalize_layout_lines(lines: list[dict]) -> list[dict[str, Any]]:
+    normalized = [_line_with_layout(line, index) for index, line in enumerate(lines)]
+    return sorted((line for line in normalized if line), key=lambda line: (line["page"], line["top"], line["left"]))
+
+
+def _layout_text(lines: list[dict[str, Any]]) -> str:
+    return "\n".join(line["text"] for line in lines if line.get("text"))
+
+
+def _label_value_from_same_line(text: str, labels: Iterable[str], value_pattern: str = r"(.+)") -> str | None:
+    label_pattern = _label_pattern(labels)
+    match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*{value_pattern}", text, flags=re.I)
+    if match:
+        value = match.group(1).strip().strip("|;,")
+        return value or None
+    return None
+
+
+def _looks_like_label(text: str) -> bool:
+    label_groups = (
+        INVOICE_NUMBER_LABEL_ALIASES,
+        INVOICE_DATE_LABEL_ALIASES,
+        TOTAL_AMOUNT_LABEL_ALIASES,
+        ("Due Date", "Payment Due", "Due", "Subtotal", "Sub Total", "Tax", "VAT", "Discount", "Rounding"),
+    )
+    return any(re.search(rf"\b(?:{_label_pattern(labels)})\b", text, flags=re.I) for labels in label_groups)
+
+
+def _candidate_to_right(label_line: dict[str, Any], lines: list[dict[str, Any]]) -> str | None:
+    candidates: list[tuple[float, str]] = []
+    for line in lines:
+        if line["line_id"] == label_line["line_id"] or line["page"] != label_line["page"]:
+            continue
+        if line["left"] < label_line["right"] - max(4.0, label_line["height"] * 0.25):
+            continue
+        vertical_gap = abs(line["center_y"] - label_line["center_y"])
+        if vertical_gap > max(label_line["height"], line["height"]) * 0.8:
+            continue
+        if _looks_like_label(line["text"]):
+            continue
+        horizontal_gap = max(0.0, line["left"] - label_line["right"])
+        score = vertical_gap * 4.0 + horizontal_gap
+        candidates.append((score, line["text"]))
+    if not candidates:
+        return None
+    return min(candidates)[1]
+
+
+def _candidate_below(label_line: dict[str, Any], lines: list[dict[str, Any]]) -> str | None:
+    candidates: list[tuple[float, str]] = []
+    for line in lines:
+        if line["line_id"] == label_line["line_id"] or line["page"] != label_line["page"]:
+            continue
+        if line["top"] < label_line["bottom"] - max(2.0, label_line["height"] * 0.15):
+            continue
+        vertical_gap = line["top"] - label_line["bottom"]
+        if vertical_gap > label_line["height"] * 3.0:
+            continue
+        horizontal_offset = abs(line["left"] - label_line["left"])
+        overlap = min(label_line["right"], line["right"]) - max(label_line["left"], line["left"])
+        if overlap < 0 and horizontal_offset > max(80.0, label_line["width"]):
+            continue
+        if _looks_like_label(line["text"]):
+            continue
+        score = vertical_gap * 3.0 + horizontal_offset
+        candidates.append((score, line["text"]))
+    if not candidates:
+        return None
+    return min(candidates)[1]
+
+
+def _extract_layout_labeled_value(lines: list[dict[str, Any]], labels: Iterable[str], *, value_pattern: str = r"(.+)") -> str | None:
+    label_pattern = re.compile(rf"\b(?:{_label_pattern(labels)})\b", flags=re.I)
+    for line in lines:
+        if not label_pattern.search(line["text"]):
+            continue
+        inline = _label_value_from_same_line(line["text"], labels, value_pattern=value_pattern)
+        if inline:
+            return inline
+        right = _candidate_to_right(line, lines)
+        if right:
+            return right.strip().strip("|;,")
+        below = _candidate_below(line, lines)
+        if below:
+            return below.strip().strip("|;,")
+    return None
+
+
+def _group_layout_rows(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    rows: list[list[dict[str, Any]]] = []
+    for line in lines:
+        if not rows:
+            rows.append([line])
+            continue
+        previous = rows[-1]
+        prev_center = sum(item["center_y"] for item in previous) / len(previous)
+        prev_height = max(item["height"] for item in previous)
+        if line["page"] == previous[0]["page"] and abs(line["center_y"] - prev_center) <= max(prev_height, line["height"]) * 0.7:
+            previous.append(line)
+        else:
+            rows.append([line])
+    for row in rows:
+        row.sort(key=lambda item: item["left"])
+    return rows
+
+
+def _row_text(row: list[dict[str, Any]]) -> str:
+    return " ".join(cell["text"] for cell in sorted(row, key=lambda item: item["left"])).strip()
+
+
+def _infer_header_columns(row: list[dict[str, Any]]) -> dict[str, float]:
+    columns: dict[str, float] = {}
+    for cell in row:
+        text = cell["text"].lower()
+        if re.search(r"description|code/?desc|item|service|product", text):
+            columns.setdefault("description", cell["center_x"])
+        if re.search(r"\bqty\b|quantity", text):
+            columns.setdefault("quantity", cell["center_x"])
+        if re.search(r"unit|price|s/price|rate", text) and not re.search(r"amount|total", text):
+            columns.setdefault("unit_price", cell["center_x"])
+        if re.search(r"amount|total", text):
+            columns.setdefault("amount", cell["center_x"])
+    return columns
+
+
+def _assign_cells_to_columns(row: list[dict[str, Any]], columns: dict[str, float]) -> dict[str, str]:
+    assigned: dict[str, list[str]] = {name: [] for name in columns}
+    ordered_columns = sorted(columns.items(), key=lambda item: item[1])
+    for cell in row:
+        nearest = min(ordered_columns, key=lambda item: abs(cell["center_x"] - item[1]))[0]
+        assigned.setdefault(nearest, []).append(cell["text"])
+    return {name: " ".join(parts).strip() for name, parts in assigned.items() if parts}
+
+
+def _parse_layout_row_with_columns(row: list[dict[str, Any]], columns: dict[str, float]) -> LineItem | None:
+    text = _row_text(row)
+    assigned = _assign_cells_to_columns(row, columns) if columns else {}
+    description = assigned.get("description")
+    quantity = _normalize_quantity(parse_amount(assigned.get("quantity"))) if assigned.get("quantity") else None
+    unit_price = parse_amount(assigned.get("unit_price")) if assigned.get("unit_price") else None
+    amount = parse_amount(assigned.get("amount")) if assigned.get("amount") else None
+
+    if not amount:
+        amounts = [parse_amount(token) for token in re.findall(AMOUNT_TOKEN, text)]
+        amounts = [value for value in amounts if value is not None]
+        if amounts:
+            amount = amounts[-1]
+            if unit_price is None and len(amounts) >= 2:
+                unit_price = amounts[-2]
+
+    if not description:
+        row_match = re.match(r"(.+?)\s+(\d+(?:[.,]\d+)?)\s+" + AMOUNT_TOKEN + r"\s+" + AMOUNT_TOKEN + r"$", text)
+        if row_match:
+            description = row_match.group(1).strip()
+            quantity = _normalize_quantity(parse_amount(row_match.group(2)))
+        elif amount is not None:
+            amount_tokens = re.findall(AMOUNT_TOKEN, text)
+            description = re.sub(re.escape(amount_tokens[-1]) + r"\s*$", "", text).strip(" -|\t") if amount_tokens else text
+
+    if not description or len(description) < 3 or amount is None:
+        return None
+    item: LineItem = {"description": description, "quantity": quantity, "unit_price": unit_price, "amount": amount}
+    return item
+
+
+def _extract_layout_line_items(lines: list[dict[str, Any]]) -> list[LineItem]:
+    rows = _group_layout_rows(lines)
+    header_pattern = re.compile(r"\b(description|code/?desc|item|service|product)\b.*\b(qty|quantity|unit|price|amount|s/price)\b", re.I)
+    stop_pattern = re.compile(
+        r"\b(subtotal|sub total|total\s+qty|total\s+sales|grand\s+total|total|tax|discount|"
+        r"balance|amount due|payment|cash|change|rounding)\b",
+        re.I,
+    )
+    for index, row in enumerate(rows):
+        text = _row_text(row)
+        if not header_pattern.search(text):
+            continue
+        columns = _infer_header_columns(row)
+        items: list[LineItem] = []
+        table_text = [text]
+        for data_row in rows[index + 1 :]:
+            row_text = _row_text(data_row)
+            if stop_pattern.search(row_text):
+                break
+            if not row_text:
+                continue
+            table_text.append(row_text)
+            item = _parse_layout_row_with_columns(data_row, columns)
+            if item:
+                items.append(item)
+        if items:
+            return items[:100]
+        fallback_items = extract_line_items("\n".join(table_text))
+        if fallback_items:
+            return fallback_items
+    return []
+
+
+def extract_invoice_fields_from_lines(lines: list[dict]) -> InvoiceFields:
+    """Extract invoice fields using OCR line bbox proximity, falling back to text parsing."""
+    layout_lines = _normalize_layout_lines(lines)
+    text = _layout_text(layout_lines) if layout_lines else "\n".join(str(line.get("text") or "") for line in lines)
+    fields = extract_invoice_fields(text)
+    if not layout_lines:
+        return fields
+
+    prefer_day_first = _is_malaysian_receipt(text)
+    invoice_number = _extract_layout_labeled_value(
+        layout_lines,
+        INVOICE_NUMBER_LABEL_ALIASES,
+        value_pattern=r"([A-Z0-9][A-Z0-9._/-]{2,})",
+    )
+    if invoice_number:
+        fields["invoice_number"] = invoice_number.strip().rstrip(".,")
+
+    date_pattern = rf"(\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}|\d{{1,2}}\s+(?:{MONTHS})\s+\d{{4}}|(?:{MONTHS})\s+\d{{1,2}},\s*\d{{4}})"
+    invoice_date_raw = _extract_layout_labeled_value(layout_lines, INVOICE_DATE_LABEL_ALIASES, value_pattern=date_pattern)
+    due_date_raw = _extract_layout_labeled_value(layout_lines, ["Due Date", "Payment Due", "Due"], value_pattern=date_pattern)
+    extra_reasons: set[str] = set()
+    if invoice_date_raw:
+        invoice_date, ambiguous_invoice = parse_invoice_date(invoice_date_raw, prefer_day_first=prefer_day_first)
+        fields["invoice_date"] = invoice_date
+        if ambiguous_invoice:
+            extra_reasons.add("ambiguous_date_format")
+    if due_date_raw:
+        due_date, ambiguous_due = parse_invoice_date(due_date_raw, prefer_day_first=prefer_day_first)
+        fields["due_date"] = due_date
+        if ambiguous_due:
+            extra_reasons.add("ambiguous_date_format")
+
+    amount_specs = (
+        ("subtotal", ["Subtotal", "Sub Total", "Net Amount"]),
+        ("tax", ["Tax", "VAT", "Sales Tax", "GST Amount"]),
+        ("discount", ["Discount"]),
+        ("rounding", ["Rounding", "Rounding Adjustment"]),
+        ("total_amount", TOTAL_AMOUNT_LABEL_ALIASES),
+    )
+    for field_name, labels in amount_specs:
+        raw_value = _extract_layout_labeled_value(layout_lines, labels, value_pattern=rf"({AMOUNT_TOKEN})")
+        amount = parse_amount(raw_value) if raw_value else None
+        if amount is not None:
+            fields[field_name] = amount  # type: ignore[literal-required]
+
+    line_items = _extract_layout_line_items(layout_lines)
+    if line_items:
+        fields["line_items"] = line_items
+
+    fields["currency"] = detect_currency(text)
+    stale_reasons = {
+        "missing_invoice_number",
+        "missing_invoice_date",
+        "missing_total_amount",
+        "currency_not_detected",
+        "low_ocr_confidence",
+        "line_items_subtotal_mismatch",
+        "line_items_total_mismatch",
+        "line_items_quantity_mismatch",
+    }
+    fields["review_reasons"] = [reason for reason in fields.get("review_reasons", []) if reason not in stale_reasons]
+    return validate_invoice_fields(fields, extra_review_reasons=sorted(extra_reasons))
+
 def extract_invoice_fields(text: str) -> InvoiceFields:
     fields = empty_invoice_fields()
     lines = text.splitlines()
@@ -593,10 +890,12 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     return validate_invoice_fields(fields, extra_review_reasons=reasons)
 
 
-def extract_invoice_from_result(doc_id: str, result: dict, out_dir: Path) -> InvoiceFields:
+def extract_invoice_from_result(
+    doc_id: str, result: dict, out_dir: Path, ocr_lines: list[dict] | None = None
+) -> InvoiceFields:
     """Run invoice extraction after assemble and persist invoice_fields.json."""
     text = result.get("full_text", "") or ""
-    fields = extract_invoice_fields(text)
+    fields = extract_invoice_fields_from_lines(ocr_lines) if ocr_lines else extract_invoice_fields(text)
     invoice_dir = out_dir.parent / "invoice"
     invoice_dir.mkdir(parents=True, exist_ok=True)
     final_dir = out_dir
