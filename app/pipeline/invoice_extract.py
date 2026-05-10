@@ -15,6 +15,67 @@ MONTHS = "January|February|March|April|May|June|July|August|September|October|No
 
 AMOUNT_TOKEN = r"(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d{1,3}(?:[,.]\d{3})*(?:[,.]\d{2})?|(?:[$€£¥]\s*)?(?:[A-Z]{3}\s*)?-?\d+(?:[,.]\d{2})?"
 
+INVOICE_NUMBER_LABEL_ALIASES = (
+    "Invoice No",
+    "Invoice Number",
+    "Tax Invoice No",
+    "Inv No",
+    "Ref No",
+    "Reference No",
+    "Document No",
+    # Legacy receipt shorthand retained for existing cash-sale documents.
+    "Doc No",
+)
+INVOICE_DATE_LABEL_ALIASES = (
+    "Invoice Date",
+    "Inv Date",
+    "Date Issued",
+    "Issue Date",
+    "Document Date",
+    # Short receipt labels retained for documents that do not print an invoice-specific date label.
+    "Date",
+    "Issued",
+)
+TOTAL_AMOUNT_LABEL_ALIASES = (
+    "Total Amount",
+    "Amount Due",
+    "Amount Payable",
+    "Balance Due",
+    "Net Total",
+    "Grand Total",
+    "Rounded Total",
+    # Existing aliases used by receipt and invoice fixtures.
+    "Invoice Total",
+    "Total Sales",
+    "Total",
+)
+
+OCR_CONFUSABLES = {
+    "i": "[iIl1]",
+    "I": "[iIl1]",
+    "l": "[lLI1]",
+    "L": "[lLI1]",
+    "o": "[oO0]",
+    "O": "[oO0]",
+}
+
+
+def _label_to_regex(label: str) -> str:
+    """Build an OCR-tolerant regex for configured field labels."""
+    parts: list[str] = []
+    for char in label:
+        if char.isspace():
+            parts.append(r"\s+")
+        elif char == ".":
+            parts.append(r"\.?")
+        else:
+            parts.append(OCR_CONFUSABLES.get(char, re.escape(char)))
+    return "".join(parts)
+
+
+def _label_pattern(labels: Iterable[str]) -> str:
+    return "|".join(_label_to_regex(label) for label in sorted(labels, key=len, reverse=True))
+
 
 def parse_amount(raw: str | None) -> float | None:
     """Safely parse common invoice amount formats without guessing arbitrary text."""
@@ -90,14 +151,10 @@ def parse_invoice_date(raw: str | None, *, prefer_day_first: bool = False) -> tu
 
 
 def extract_invoice_number(text: str) -> str | None:
-    patterns = [
-        r"\bInvoice\s*(?:No\.?|Number|#|ID)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
-        r"\bInv\s*(?:No\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
-        r"\bBill\s*(?:No\.?|#)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
-        r"\bDoc(?:ument)?\s*(?:No\.?|Number|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.I)
+    label_pattern = _label_pattern(INVOICE_NUMBER_LABEL_ALIASES)
+    value_pattern = r"([A-Z0-9][A-Z0-9._/-]{2,})"
+    for line in text.splitlines():
+        match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*{value_pattern}", line.strip(), flags=re.I)
         if match:
             return match.group(1).strip().rstrip(".,")
     return None
@@ -109,8 +166,8 @@ def _is_malaysian_receipt(text: str) -> bool:
 
 def _extract_labeled_date(text: str, labels: Iterable[str], *, prefer_day_first: bool = False) -> tuple[str | None, bool]:
     date_pattern = rf"(\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}|\d{{1,2}}\s+(?:{MONTHS})\s+\d{{4}}|(?:{MONTHS})\s+\d{{1,2}},\s*\d{{4}})"
-    label_pattern = "|".join(re.escape(label) for label in labels)
-    match = re.search(rf"\b(?:{label_pattern})\b[ \t]*[:#-]?[ \t]*{date_pattern}", text, flags=re.I)
+    label_pattern = _label_pattern(labels)
+    match = re.search(rf"\b(?:{label_pattern})\b\.?[ \t]*[:#-]?[ \t]*{date_pattern}", text, flags=re.I)
     if not match:
         return None, False
     return parse_invoice_date(match.group(1), prefer_day_first=prefer_day_first)
@@ -119,9 +176,9 @@ def _extract_labeled_date(text: str, labels: Iterable[str], *, prefer_day_first:
 
 def _extract_labeled_text(text: str, labels: Iterable[str], *, max_length: int = 120) -> str | None:
     """Extract short single-line metadata values such as cashier, GST ID, and references."""
-    label_pattern = "|".join(re.escape(label) for label in labels)
+    label_pattern = _label_pattern(labels)
     for line in text.splitlines():
-        match = re.search(rf"\b(?:{label_pattern})\b\s*[:#-]?\s*(.+)", line.strip(), flags=re.I)
+        match = re.search(rf"\b(?:{label_pattern})\b\.?\s*[:#-]?\s*(.+)", line.strip(), flags=re.I)
         if match:
             value = match.group(1).strip().strip("|;,")
             if value:
@@ -218,8 +275,8 @@ def detect_currency(text: str) -> str:
 
 
 def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
-    label_pattern = "|".join(re.escape(label) for label in labels)
-    matches = re.finditer(rf"\b(?:{label_pattern})\b[ \t]*[:#-]?[ \t]*({AMOUNT_TOKEN})", text, flags=re.I)
+    label_pattern = _label_pattern(labels)
+    matches = re.finditer(rf"\b(?:{label_pattern})\b\.?[ \t]*[:#-]?[ \t]*({AMOUNT_TOKEN})", text, flags=re.I)
     amounts = [parse_amount(match.group(1)) for match in matches]
     amounts = [amount for amount in amounts if amount is not None]
     if not amounts:
@@ -229,9 +286,12 @@ def _extract_labeled_amount(text: str, labels: Iterable[str]) -> float | None:
 
 def extract_total_amount(text: str) -> float | None:
     """Find the payable receipt total while ignoring cash/change and metadata totals."""
+    high_priority_total_labels = [label for label in TOTAL_AMOUNT_LABEL_ALIASES if label != "Total"]
+    high_priority_total_pattern = _label_pattern(high_priority_total_labels)
+    generic_total_pattern = _label_pattern(["Total"])
     priorities = [
-        (re.compile(r"\b(round(?:ed)?\s+total|total\s+sales|grand\s+total|amount\s+due|invoice\s+total|total\s+amount)\b", re.I), 3),
-        (re.compile(r"\btotal\b", re.I), 1),
+        (re.compile(rf"\b(?:{high_priority_total_pattern})\b", re.I), 3),
+        (re.compile(rf"\b(?:{generic_total_pattern})\b", re.I), 1),
     ]
     blocked = re.compile(r"\b(total\s+qty|change|cash|discount|subtotal|sub\s+total|tax|gst\s*id|rounding)\b", re.I)
     candidates: list[tuple[int, float]] = []
@@ -252,7 +312,7 @@ def extract_total_amount(text: str) -> float | None:
             candidates.append((score, amounts[-1]))
 
     if not candidates:
-        return _extract_labeled_amount(text, ["Total Amount", "Amount Due", "Balance Due", "Grand Total", "Invoice Total", "Total"])
+        return _extract_labeled_amount(text, TOTAL_AMOUNT_LABEL_ALIASES)
 
     best_score = max(score for score, _ in candidates)
     best_amounts = [amount for score, amount in candidates if score == best_score]
@@ -493,7 +553,7 @@ def extract_invoice_fields(text: str) -> InvoiceFields:
     fields["invoice_number"] = extract_invoice_number(text)
     prefer_day_first = _is_malaysian_receipt(text)
     invoice_date, ambiguous_invoice = _extract_labeled_date(
-        text, ["Invoice Date", "Date", "Issued", "Issue Date"], prefer_day_first=prefer_day_first
+        text, INVOICE_DATE_LABEL_ALIASES, prefer_day_first=prefer_day_first
     )
     due_date, ambiguous_due = _extract_labeled_date(
         text, ["Due Date", "Payment Due", "Due"], prefer_day_first=prefer_day_first
