@@ -185,3 +185,32 @@ Change : 0.00
     assert "line_items_total_mismatch" not in fields["review_reasons"]
     assert "line_items_quantity_mismatch" not in fields["review_reasons"]
     assert "cash_change_mismatch" not in fields["review_reasons"]
+
+
+def test_extract_invoice_fields_with_ocr_confused_key_labels():
+    text = """Example Trading LLC
+Tax lnvoice No: OCR-7842
+Inv0ice Date: 2026-04-30
+Description Qty Unit Amount
+Service fee 1 450.00 450.00
+TotaI Am0unt: USD 450.00
+"""
+    fields = extract_invoice_fields(text)
+    assert fields["invoice_number"] == "OCR-7842"
+    assert fields["invoice_date"] == "2026-04-30"
+    assert fields["total_amount"] == 450.00
+    assert "missing_invoice_number" not in fields["review_reasons"]
+    assert "missing_invoice_date" not in fields["review_reasons"]
+    assert "missing_total_amount" not in fields["review_reasons"]
+
+
+def test_extract_invoice_fields_with_reference_document_and_payable_aliases():
+    text = """Acme Supplies LLC
+Reference No: REF-2026-118
+Document Date: 30/04/2026
+Amount Payable: USD 1,275.50
+"""
+    fields = extract_invoice_fields(text)
+    assert fields["invoice_number"] == "REF-2026-118"
+    assert fields["invoice_date"] == "2026-04-30"
+    assert fields["total_amount"] == 1275.50
