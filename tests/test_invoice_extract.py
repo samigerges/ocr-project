@@ -439,3 +439,73 @@ def test_extract_malaysian_cash_sales_from_glued_ocr_layout_lines():
     assert fields["line_items"][-1]["amount"] == 36.00
     assert "cash_change_mismatch" not in fields["review_reasons"]
     assert "missing_invoice_date" not in fields["review_reasons"]
+
+
+def test_extract_ocr_glued_cash_bill_fields_from_layout_lines():
+    def line(index: int, text: str, y: int, left: int = 100, right: int = 1800):
+        return {
+            "text": text,
+            "text_clean": text,
+            "confidence": 0.98,
+            "page": 1,
+            "line_id": f"p0001_l{index:04d}",
+            "bbox": [
+                [float(left), float(y)],
+                [float(right), float(y)],
+                [float(right), float(y + 70)],
+                [float(left), float(y + 70)],
+            ],
+        }
+
+    lines = [
+        line(1, "tan woon yann", 132, 308, 1263),
+        line(2, "BOOK TA KTAMANDAYASDN BHD", 381, 299, 1647),
+        line(3, "789417-W", 484, 824, 1131),
+        line(4, "NO.555S7&59JALANSAGU18", 580, 451, 1500),
+        line(5, "TAMAN DAYA,", 671, 762, 1184),
+        line(6, "81100 JOHOR BAHRU", 757, 644, 1320),
+        line(7, "JOHOR.", 849, 857, 1090),
+        line(8, "DocumentNoTD01167104", 1341, 209, 1102),
+        line(9, "Date", 1457, 205, 406),
+        line(10, "25/12/2018813:39PM", 1457, 652, 1352),
+        line(12, "MANIS Cashiery", 1548, 205, 865),
+        line(14, "CASH BILL", 1792, 762, 1180),
+        line(15, "CODE/DESC", 1979, 131, 500),
+        line(16, "PRICE Disc", 1979, 791, 1221),
+        line(18, "AMOUNT", 1979, 1467, 1742),
+        line(20, "RM RM QTY", 2059, 279, 1765),
+        line(23, "KF MODELLING CLAY KIDDYFISH 9556939040118", 2219, 123, 1566),
+        line(27, "9.00 9.000 0.00 1PC", 2316, 285, 1754),
+        line(29, "9.00 Total':", 2492, 955, 1758),
+        line(31, "0.00 Rour Jing Adjustment", 2612, 475, 1754),
+        line(32, "Roundd Total RM", 2745, 357, 1156),
+        line(33, "9.00", 2745, 1570, 1754),
+        line(34, "Cash", 2910, 803, 975),
+        line(35, "10.00", 2923, 1574, 1750),
+        line(37, "100 CHANGE", 2994, 807, 1757),
+    ]
+
+    fields = extract_invoice_fields_from_lines(lines)
+
+    assert fields["vendor_registration_number"] == "789417-W"
+    assert (
+        fields["vendor_address"]
+        == "NO.555S7&59JALANSAGU18\nTAMAN DAYA,\n81100 JOHOR BAHRU\nJOHOR."
+    )
+    assert fields["invoice_number"] == "TD01167104"
+    assert fields["invoice_date"] == "2018-12-25"
+    assert fields["transaction_time"] == "8:13:39PM"
+    assert fields["cashier"] == "MANIS"
+    assert fields["total_amount"] == 9.00
+    assert fields["cash_received"] == 10.00
+    assert fields["change_amount"] == 1.00
+    assert fields["line_items"] == [
+        {
+            "item_code": "9556939040118",
+            "description": "KF MODELLING CLAY KIDDYFISH",
+            "quantity": 1,
+            "unit_price": 9.00,
+            "amount": 9.00,
+        }
+    ]
+    assert "line_items_total_mismatch" not in fields["review_reasons"]
