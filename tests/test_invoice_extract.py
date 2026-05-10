@@ -1,4 +1,10 @@
-from app.pipeline.invoice_extract import extract_invoice_fields, extract_invoice_fields_from_lines, extract_invoice_number, parse_amount, parse_invoice_date
+from app.pipeline.invoice_extract import (
+    extract_invoice_fields,
+    extract_invoice_fields_from_lines,
+    extract_invoice_number,
+    parse_amount,
+    parse_invoice_date,
+)
 
 
 def test_parse_amount_common_formats():
@@ -76,7 +82,10 @@ Change : 0.00
     assert fields["document_title"] == "CASH SALES"
     assert fields["vendor_name"] == "SOON HUAT MACHINERY ENTERPRISE"
     assert fields["vendor_registration_number"] == "JM0352019-K"
-    assert fields["vendor_address"] == "NO.53 JALAN PUTRA 1,\nTAMAN SRI PUTRA,\n81200 JOHOR BAHRU\nJOHOR"
+    assert (
+        fields["vendor_address"]
+        == "NO.53 JALAN PUTRA 1,\nTAMAN SRI PUTRA,\n81200 JOHOR BAHRU\nJOHOR"
+    )
     assert fields["gst_id"] == "002116837376"
     assert fields["invoice_number"] == "CS00004040"
     assert fields["invoice_date"] == "2019-01-11"
@@ -179,7 +188,10 @@ Change : 0.00
     assert fields["rounding"] == 0.00
     assert len(fields["line_items"]) == 8
     assert fields["line_items"][0]["item_code"] == "1072"
-    assert fields["line_items"][0]["description"] == "REPAIR ENGINE POWER SPRAYER (1UNIT) workmanship & service"
+    assert (
+        fields["line_items"][0]["description"]
+        == "REPAIR ENGINE POWER SPRAYER (1UNIT) workmanship & service"
+    )
     assert fields["line_items"][-1]["quantity"] == 2
     assert fields["line_items"][-1]["amount"] == 36.00
     assert "line_items_total_mismatch" not in fields["review_reasons"]
@@ -218,21 +230,111 @@ Amount Payable: USD 1,275.50
 
 def test_extract_invoice_fields_from_lines_uses_bbox_label_proximity_and_table_columns():
     lines = [
-        {"text": "Acme Supplies LLC", "confidence": 0.99, "bbox": [[40, 30], [190, 30], [190, 50], [40, 50]], "page": 1, "line_id": "vendor"},
-        {"text": "Invoice No", "confidence": 0.98, "bbox": [[40, 80], [130, 80], [130, 100], [40, 100]], "page": 1, "line_id": "inv-label"},
-        {"text": "INV-LAYOUT-7", "confidence": 0.97, "bbox": [[170, 80], [290, 80], [290, 100], [170, 100]], "page": 1, "line_id": "inv-value"},
-        {"text": "Invoice Date", "confidence": 0.98, "bbox": [[40, 115], [145, 115], [145, 135], [40, 135]], "page": 1, "line_id": "date-label"},
-        {"text": "2026-05-09", "confidence": 0.97, "bbox": [[40, 145], [145, 145], [145, 165], [40, 165]], "page": 1, "line_id": "date-value"},
-        {"text": "Description", "confidence": 0.99, "bbox": [[40, 220], [150, 220], [150, 240], [40, 240]], "page": 1, "line_id": "h-desc"},
-        {"text": "Qty", "confidence": 0.99, "bbox": [[260, 220], [295, 220], [295, 240], [260, 240]], "page": 1, "line_id": "h-qty"},
-        {"text": "Unit Price", "confidence": 0.99, "bbox": [[340, 220], [430, 220], [430, 240], [340, 240]], "page": 1, "line_id": "h-unit"},
-        {"text": "Amount", "confidence": 0.99, "bbox": [[470, 220], [540, 220], [540, 240], [470, 240]], "page": 1, "line_id": "h-amount"},
-        {"text": "Consulting", "confidence": 0.96, "bbox": [[40, 255], [140, 255], [140, 275], [40, 275]], "page": 1, "line_id": "r1-desc"},
-        {"text": "2", "confidence": 0.96, "bbox": [[270, 255], [280, 255], [280, 275], [270, 275]], "page": 1, "line_id": "r1-qty"},
-        {"text": "50.00", "confidence": 0.96, "bbox": [[355, 255], [410, 255], [410, 275], [355, 275]], "page": 1, "line_id": "r1-unit"},
-        {"text": "100.00", "confidence": 0.96, "bbox": [[480, 255], [540, 255], [540, 275], [480, 275]], "page": 1, "line_id": "r1-amount"},
-        {"text": "Total Amount", "confidence": 0.98, "bbox": [[330, 310], [445, 310], [445, 330], [330, 330]], "page": 1, "line_id": "total-label"},
-        {"text": "USD 105.00", "confidence": 0.97, "bbox": [[470, 310], [560, 310], [560, 330], [470, 330]], "page": 1, "line_id": "total-value"},
+        {
+            "text": "Acme Supplies LLC",
+            "confidence": 0.99,
+            "bbox": [[40, 30], [190, 30], [190, 50], [40, 50]],
+            "page": 1,
+            "line_id": "vendor",
+        },
+        {
+            "text": "Invoice No",
+            "confidence": 0.98,
+            "bbox": [[40, 80], [130, 80], [130, 100], [40, 100]],
+            "page": 1,
+            "line_id": "inv-label",
+        },
+        {
+            "text": "INV-LAYOUT-7",
+            "confidence": 0.97,
+            "bbox": [[170, 80], [290, 80], [290, 100], [170, 100]],
+            "page": 1,
+            "line_id": "inv-value",
+        },
+        {
+            "text": "Invoice Date",
+            "confidence": 0.98,
+            "bbox": [[40, 115], [145, 115], [145, 135], [40, 135]],
+            "page": 1,
+            "line_id": "date-label",
+        },
+        {
+            "text": "2026-05-09",
+            "confidence": 0.97,
+            "bbox": [[40, 145], [145, 145], [145, 165], [40, 165]],
+            "page": 1,
+            "line_id": "date-value",
+        },
+        {
+            "text": "Description",
+            "confidence": 0.99,
+            "bbox": [[40, 220], [150, 220], [150, 240], [40, 240]],
+            "page": 1,
+            "line_id": "h-desc",
+        },
+        {
+            "text": "Qty",
+            "confidence": 0.99,
+            "bbox": [[260, 220], [295, 220], [295, 240], [260, 240]],
+            "page": 1,
+            "line_id": "h-qty",
+        },
+        {
+            "text": "Unit Price",
+            "confidence": 0.99,
+            "bbox": [[340, 220], [430, 220], [430, 240], [340, 240]],
+            "page": 1,
+            "line_id": "h-unit",
+        },
+        {
+            "text": "Amount",
+            "confidence": 0.99,
+            "bbox": [[470, 220], [540, 220], [540, 240], [470, 240]],
+            "page": 1,
+            "line_id": "h-amount",
+        },
+        {
+            "text": "Consulting",
+            "confidence": 0.96,
+            "bbox": [[40, 255], [140, 255], [140, 275], [40, 275]],
+            "page": 1,
+            "line_id": "r1-desc",
+        },
+        {
+            "text": "2",
+            "confidence": 0.96,
+            "bbox": [[270, 255], [280, 255], [280, 275], [270, 275]],
+            "page": 1,
+            "line_id": "r1-qty",
+        },
+        {
+            "text": "50.00",
+            "confidence": 0.96,
+            "bbox": [[355, 255], [410, 255], [410, 275], [355, 275]],
+            "page": 1,
+            "line_id": "r1-unit",
+        },
+        {
+            "text": "100.00",
+            "confidence": 0.96,
+            "bbox": [[480, 255], [540, 255], [540, 275], [480, 275]],
+            "page": 1,
+            "line_id": "r1-amount",
+        },
+        {
+            "text": "Total Amount",
+            "confidence": 0.98,
+            "bbox": [[330, 310], [445, 310], [445, 330], [330, 330]],
+            "page": 1,
+            "line_id": "total-label",
+        },
+        {
+            "text": "USD 105.00",
+            "confidence": 0.97,
+            "bbox": [[470, 310], [560, 310], [560, 330], [470, 330]],
+            "page": 1,
+            "line_id": "total-value",
+        },
     ]
 
     fields = extract_invoice_fields_from_lines(lines)
@@ -240,7 +342,100 @@ def test_extract_invoice_fields_from_lines_uses_bbox_label_proximity_and_table_c
     assert fields["invoice_number"] == "INV-LAYOUT-7"
     assert fields["invoice_date"] == "2026-05-09"
     assert fields["total_amount"] == 105.00
-    assert fields["line_items"] == [{"description": "Consulting", "quantity": 2, "unit_price": 50.00, "amount": 100.00}]
+    assert fields["line_items"] == [
+        {
+            "description": "Consulting",
+            "quantity": 2,
+            "unit_price": 50.00,
+            "amount": 100.00,
+        }
+    ]
     assert "missing_invoice_number" not in fields["review_reasons"]
     assert "missing_invoice_date" not in fields["review_reasons"]
     assert "missing_total_amount" not in fields["review_reasons"]
+
+
+def test_extract_malaysian_cash_sales_from_glued_ocr_layout_lines():
+    def line(index, text, y):
+        return {
+            "text": text,
+            "text_clean": text,
+            "confidence": 0.98,
+            "page": 1,
+            "line_id": f"p0001_l{index:04d}",
+            "bbox": [
+                [80.0, float(y)],
+                [1600.0, float(y)],
+                [1600.0, float(y + 80)],
+                [80.0, float(y + 80)],
+            ],
+        }
+
+    lines = [
+        line(1, "tan chay yee", 173),
+        line(2, "SOON HUAT MACHINERY ENTERPRISE", 445),
+        line(3, "JM0352019-K", 528),
+        line(4, "NO.53JALAN PUTRA 1", 624),
+        line(5, "TAMAN SRIPUTRA,", 730),
+        line(6, "81200 JOHOR BAHRU", 818),
+        line(7, "JOHOR", 909),
+        line(8, "TEL07-5547360/016-7993391FAX07-5624059", 1006),
+        line(9, "SOONHUAT2000@HOTMAIL.COM", 1103),
+        line(10, "GSTID002116837376", 1200),
+        line(11, "CASH SALES", 1311),
+        line(12, "Date11/01/2019 Doc No. CS00004040", 1417),
+        line(17, "Time09:44:00 Cashier", 1519),
+        line(19, "Ret. Salesperson", 1621),
+        line(23, "Amount Tax Qty S/Price S/Price Item", 1795),
+        line(26, "80.00", 1882),
+        line(28, "80.00 1 80.00 1072", 1882),
+        line(30, "REPAIR ENGINE POWER SPRAYER (1UNIT)", 1983),
+        line(31, "workmanship &service", 2090),
+        line(33, "160.00 160.00 160.00 70549", 2158),
+        line(36, "GIANT 606 OVERFLOW ASSY", 2269),
+        line(39, "17.00 17.00", 2370),
+        line(41, "17.00 1071 1", 2370),
+        line(42, "ENGINE OIL", 2467),
+        line(43, "10.00 10.00 10.00 70791 1", 2564),
+        line(48, "GREASE FOR TOOLS40ML (AKODA", 2665),
+        line(50, "6.00 6.00 6.00 1 70637", 2762),
+        line(54, "EY20PLUG CHAMPION", 2873),
+        line(58, "8.00 1 8.00 8.00 1643", 2970),
+        line(60, "STARTER TALI", 3077),
+        line(62, "10.00 10.00 10.00 70197", 3164),
+        line(65, "EY20 STARTER HANDLE", 3265),
+        line(67, "36.00 2 70561 18.00 18.00", 3367),
+        line(71, "HD40 1LCOTIN", 3478),
+        line(74, "327.00 9 Total Qty", 3554),
+        line(75, "Total Sales 327.00", 3720),
+        line(77, "Discount 0.00 327.00 Total 0.00", 3836),
+        line(82, "Rounding 0.00", 4057),
+        line(84, "Total Sales 327.00", 4184),
+        line(86, "CASH 327.00", 4295),
+        line(88, "Change: 0.00", 4392),
+    ]
+
+    fields = extract_invoice_fields_from_lines(lines)
+
+    assert fields["vendor_name"] == "SOON HUAT MACHINERY ENTERPRISE"
+    assert fields["vendor_registration_number"] == "JM0352019-K"
+    assert fields["vendor_phone"] == "07-5547360/016-7993391"
+    assert fields["vendor_fax"] == "07-5624059"
+    assert fields["gst_id"] == "002116837376"
+    assert fields["invoice_number"] == "CS00004040"
+    assert fields["invoice_date"] == "2019-01-11"
+    assert fields["transaction_time"] == "09:44:00"
+    assert fields["total_amount"] == 327.00
+    assert fields["total_quantity"] == 9
+    assert fields["cash_received"] == 327.00
+    assert fields["change_amount"] == 0.00
+    assert len(fields["line_items"]) == 8
+    assert fields["line_items"][0]["item_code"] == "1072"
+    assert (
+        fields["line_items"][0]["description"]
+        == "REPAIR ENGINE POWER SPRAYER (1UNIT) workmanship &service"
+    )
+    assert fields["line_items"][-1]["quantity"] == 2
+    assert fields["line_items"][-1]["amount"] == 36.00
+    assert "cash_change_mismatch" not in fields["review_reasons"]
+    assert "missing_invoice_date" not in fields["review_reasons"]
