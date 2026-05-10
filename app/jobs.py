@@ -89,7 +89,17 @@ def process_document_job(doc_id: str) -> dict:
 
     # 9) invoice extraction
     _set_progress("invoice_extract", 97, "Extracting structured invoice fields")
-    invoice_fields = extract_invoice_from_result(doc_id, result, out_dir)
+    ocr_lines = []
+    for page in result.get("pages", []):
+        page_no = page.get("page")
+        for line_index, line in enumerate(page.get("lines", []) or []):
+            if not line.get("bbox"):
+                continue
+            line_with_metadata = dict(line)
+            line_with_metadata.setdefault("page", page_no)
+            line_with_metadata.setdefault("line_id", f"p{page_no}-l{line_index}")
+            ocr_lines.append(line_with_metadata)
+    invoice_fields = extract_invoice_from_result(doc_id, result, out_dir, ocr_lines=ocr_lines or None)
     result["invoice_fields"] = invoice_fields
 
     _set_progress("receipt_layout", 98, "Grouping receipt layout and extracting receipt fields")
