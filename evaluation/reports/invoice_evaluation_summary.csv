@@ -1,2 +1,2 @@
 invoice_number_accuracy,invoice_date_accuracy,total_amount_accuracy,vendor_name_accuracy,needs_review_percentage,average_confidence,document_count
-0.0,0.0,0.0,0.0,0.0,0.0,0
+0.0,0.0,0.0,0.0,100.0,0.425,2
