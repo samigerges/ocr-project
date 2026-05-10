@@ -1,0 +1,16 @@
+{
+  "doc_id": "failed_cash_bill_td01167104",
+  "document_type": "receipt",
+  "document_title": "CASH BILL",
+  "vendor_name": "tan woon yann",
+  "invoice_number": "TD0116710",
+  "invoice_date": "25/12/2018",
+  "total_amount": null,
+  "currency": "MYR",
+  "confidence": 0.45,
+  "needs_review": true,
+  "review_reasons": [
+    "missing_total_amount",
+    "ambiguous_invoice_date"
+  ]
+}

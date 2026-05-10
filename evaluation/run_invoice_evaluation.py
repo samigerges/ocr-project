@@ -28,6 +28,10 @@ def _amount_equal(expected: str, actual: object) -> bool:
         return False
 
 
+def _ground_truth_has_content(path: Path) -> bool:
+    return bool(path.read_text(encoding="utf-8").strip())
+
+
 def _load_invoice_fields(doc_id: str) -> dict:
     candidates = [
         STORAGE_DIR / doc_id / "out" / "invoice_fields.json",
@@ -37,6 +41,14 @@ def _load_invoice_fields(doc_id: str) -> dict:
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
     return {}
+
+
+def _write_summary(summary: dict) -> None:
+    (REPORTS_DIR / "invoice_evaluation_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    with (REPORTS_DIR / "invoice_evaluation_summary.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(summary.keys()), lineterminator="\n")
+        writer.writeheader()
+        writer.writerow(summary)
 
 
 def main() -> None:
@@ -58,12 +70,14 @@ def main() -> None:
             )
 
     summary = summarize_invoice_evaluation(rows).to_dict()
-    (REPORTS_DIR / "invoice_evaluation_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    with (REPORTS_DIR / "invoice_evaluation_summary.csv").open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(summary.keys()))
-        writer.writeheader()
-        writer.writerow(summary)
+    _write_summary(summary)
     print(json.dumps(summary, indent=2))
+
+    if summary["document_count"] == 0 and _ground_truth_has_content(GROUND_TRUTH):
+        raise SystemExit(
+            "Invoice evaluation processed 0 documents even though "
+            f"{GROUND_TRUTH} is non-empty. Check that ground_truth.csv includes doc_id rows."
+        )
 
 
 if __name__ == "__main__":

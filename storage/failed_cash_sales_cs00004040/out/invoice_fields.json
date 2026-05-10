@@ -1,0 +1,17 @@
+{
+  "doc_id": "failed_cash_sales_cs00004040",
+  "document_type": "cash_sales_receipt",
+  "document_title": "CASH SALES",
+  "vendor_name": "tan chay yee",
+  "invoice_number": null,
+  "invoice_date": "11/01/2019",
+  "total_amount": 0.0,
+  "currency": "MYR",
+  "confidence": 0.4,
+  "needs_review": true,
+  "review_reasons": [
+    "missing_invoice_number",
+    "ambiguous_invoice_date",
+    "total_mismatch"
+  ]
+}

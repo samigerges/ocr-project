@@ -3,7 +3,7 @@
   "invoice_date_accuracy": 0.0,
   "total_amount_accuracy": 0.0,
   "vendor_name_accuracy": 0.0,
-  "needs_review_percentage": 0.0,
-  "average_confidence": 0.0,
-  "document_count": 0
+  "needs_review_percentage": 100.0,
+  "average_confidence": 0.425,
+  "document_count": 2
 }
