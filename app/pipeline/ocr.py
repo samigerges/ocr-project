@@ -145,7 +145,7 @@ def run_ocr_with_retry_for_page(
     """
     OCR a page using:
     1) basic preprocess first
-    2) retry with receipt and strong preprocess variants when confidence or text heuristics look weak
+    2) retry with receipt, sorie, and strong preprocess variants when confidence or text heuristics look weak
 
     Returns:
       final_page_result, metadata
@@ -173,7 +173,7 @@ def run_ocr_with_retry_for_page(
     winner_result = basic_result
     meta["retry_used"] = True
 
-    for mode in ("receipt", "strong"):
+    for mode in ("receipt", "sorie", "strong"):
         retry_img = processed_dir / mode / image_name
         if not retry_img.exists():
             continue
@@ -250,7 +250,7 @@ def run_ocr_from_manifest(
 
     Uses:
       processed/basic/page_XXXX.png first
-      then retries with processed/receipt and processed/strong variants if needed
+      then retries with processed/receipt, processed/sorie, and processed/strong variants if needed
 
     Saves chosen per-page OCR JSON into ocr_dir.
     """

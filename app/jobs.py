@@ -17,7 +17,7 @@ from app.pipeline.receipt_extract import extract_receipt_from_layout
 
 def _set_progress(stage: str, progress: int, message: str = ""):
     """
-        to update the progress status 
+    to update the progress status
     """
     job = get_current_job()
     if job is None:
@@ -43,7 +43,6 @@ def process_document_job(doc_id: str) -> dict:
     validation_dir = base / "validation"
     quality_dir = base / "quality"
     out_dir = base / "out"
-    
 
     _set_progress("start", 5, "Starting pipeline")
 
@@ -66,16 +65,25 @@ def process_document_job(doc_id: str) -> dict:
     _set_progress("preprocess_basic", 25, "Preprocessing OCR pages (basic)")
     preprocess_document_pages(pages_dir, processed_dir, mode="basic")
 
-    # 5) preprocess thermal receipt + strong retry variants
-    _set_progress("preprocess_receipt", 35, "Preparing thermal receipt preprocess variant")
+    # 5) preprocess receipt-specific retry variants
+    _set_progress(
+        "preprocess_receipt", 33, "Preparing thermal receipt preprocess variant"
+    )
     preprocess_document_pages(pages_dir, processed_dir, mode="receipt")
 
-    _set_progress("preprocess_strong", 40, "Preparing retry preprocess variant")
+    _set_progress(
+        "preprocess_sorie", 38, "Preparing SORIE/SROIE distant-receipt upscale variant"
+    )
+    preprocess_document_pages(pages_dir, processed_dir, mode="sorie")
+
+    _set_progress("preprocess_strong", 43, "Preparing retry preprocess variant")
     preprocess_document_pages(pages_dir, processed_dir, mode="strong")
 
     # 6) OCR with retry logic
     _set_progress("ocr", 55, "Running OCR with retry methodology")
-    run_ocr_from_manifest(pages_dir, processed_dir, ocr_dir, lang="en", confidence_threshold=0.90)
+    run_ocr_from_manifest(
+        pages_dir, processed_dir, ocr_dir, lang="en", confidence_threshold=0.90
+    )
 
     # 7) postprocess
     _set_progress("postprocess", 70, "Postprocessing OCR results")
@@ -99,13 +107,23 @@ def process_document_job(doc_id: str) -> dict:
             line_with_metadata.setdefault("page", page_no)
             line_with_metadata.setdefault("line_id", f"p{page_no}-l{line_index}")
             ocr_lines.append(line_with_metadata)
-    invoice_fields = extract_invoice_from_result(doc_id, result, out_dir, ocr_lines=ocr_lines or None)
+    invoice_fields = extract_invoice_from_result(
+        doc_id, result, out_dir, ocr_lines=ocr_lines or None
+    )
     result["invoice_fields"] = invoice_fields
 
-    _set_progress("receipt_layout", 98, "Grouping receipt layout and extracting receipt fields")
+    _set_progress(
+        "receipt_layout", 98, "Grouping receipt layout and extracting receipt fields"
+    )
     receipt_layout = build_receipt_layout(post_dir, layout_dir)
-    receipt_fields = extract_receipt_from_layout(doc_id, receipt_layout, extracted_dir, validation_dir)
-    result["receipt_fields"] = receipt_fields.model_dump() if hasattr(receipt_fields, "model_dump") else receipt_fields.dict()
+    receipt_fields = extract_receipt_from_layout(
+        doc_id, receipt_layout, extracted_dir, validation_dir
+    )
+    result["receipt_fields"] = (
+        receipt_fields.model_dump()
+        if hasattr(receipt_fields, "model_dump")
+        else receipt_fields.dict()
+    )
     result["quality"] = quality_report
     (out_dir / "result.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2),

@@ -12,7 +12,6 @@ from app.queue import queue, redis_conn
 from app.jobs import process_document_job
 from app.storage import doc_dir
 
-
 app = FastAPI(title="Local OCR Service", version="0.1.0")
 
 app.add_middleware(
@@ -154,11 +153,12 @@ def get_processed_image(doc_id: str, mode: str, filename: str):
       /v1/documents/{doc_id}/processed/basic/page_0001.png
       /v1/documents/{doc_id}/processed/receipt/page_0001.png
       /v1/documents/{doc_id}/processed/strong/page_0001.png
+      /v1/documents/{doc_id}/processed/sorie/page_0001.png
     """
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    if mode not in {"basic", "receipt", "strong"}:
+    if mode not in {"basic", "receipt", "sorie", "sroie", "strong"}:
         raise HTTPException(status_code=400, detail="Invalid preprocess mode")
 
     allowed = {".png", ".jpg", ".jpeg", ".webp"}
@@ -184,6 +184,7 @@ def get_ocr_page_result(doc_id: str, page_no: int):
 
     return json.loads(path.read_text(encoding="utf-8"))
 
+
 @app.get("/v1/documents/{doc_id}/pipeline")
 def get_pipeline_view(doc_id: str):
     """
@@ -193,17 +194,15 @@ def get_pipeline_view(doc_id: str):
     base = doc_dir(doc_id)
     pages_dir = base / "pages"
     processed_basic_dir = base / "processed" / "basic"
+    processed_receipt_dir = base / "processed" / "receipt"
+    processed_sorie_dir = base / "processed" / "sorie"
     processed_strong_dir = base / "processed" / "strong"
     ocr_dir = base / "ocr"
 
     manifest_path = pages_dir / "manifest.json"
 
     if not manifest_path.exists():
-        return {
-            "doc_id": doc_id,
-            "status": "not_ready",
-            "pages": []
-            }
+        return {"doc_id": doc_id, "status": "not_ready", "pages": []}
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -218,8 +217,18 @@ def get_pipeline_view(doc_id: str):
             "source": source,
             "rendered": artifact if source == "ocr" else None,
             "native_text_file": artifact if source == "native" else None,
-            "processed_basic": artifact if (processed_basic_dir / artifact).exists() else None,
-            "processed_strong": artifact if (processed_strong_dir / artifact).exists() else None,
+            "processed_basic": (
+                artifact if (processed_basic_dir / artifact).exists() else None
+            ),
+            "processed_receipt": (
+                artifact if (processed_receipt_dir / artifact).exists() else None
+            ),
+            "processed_sorie": (
+                artifact if (processed_sorie_dir / artifact).exists() else None
+            ),
+            "processed_strong": (
+                artifact if (processed_strong_dir / artifact).exists() else None
+            ),
             "ocr_result_exists": (ocr_dir / f"page_{page_no:04d}.json").exists(),
         }
         pages.append(page_info)
@@ -230,7 +239,6 @@ def get_pipeline_view(doc_id: str):
     }
 
 
-
 def _read_json_artifact(path: Path, missing_detail: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail=missing_detail)
@@ -239,19 +247,28 @@ def _read_json_artifact(path: Path, missing_detail: str):
 
 @app.get("/v1/documents/{doc_id}/quality")
 def get_quality_report(doc_id: str):
-    return _read_json_artifact(doc_dir(doc_id) / "quality" / "report.json", "Quality report not ready yet")
+    return _read_json_artifact(
+        doc_dir(doc_id) / "quality" / "report.json", "Quality report not ready yet"
+    )
 
 
 @app.get("/v1/documents/{doc_id}/layout")
 def get_receipt_layout(doc_id: str):
-    return _read_json_artifact(doc_dir(doc_id) / "layout" / "sections.json", "Layout sections not ready yet")
+    return _read_json_artifact(
+        doc_dir(doc_id) / "layout" / "sections.json", "Layout sections not ready yet"
+    )
 
 
 @app.get("/v1/documents/{doc_id}/receipt")
 def get_receipt_fields(doc_id: str):
-    return _read_json_artifact(doc_dir(doc_id) / "extracted" / "receipt.json", "Receipt fields not ready yet")
+    return _read_json_artifact(
+        doc_dir(doc_id) / "extracted" / "receipt.json", "Receipt fields not ready yet"
+    )
 
 
 @app.get("/v1/documents/{doc_id}/validation")
 def get_validation_report(doc_id: str):
-    return _read_json_artifact(doc_dir(doc_id) / "validation" / "report.json", "Validation report not ready yet")
+    return _read_json_artifact(
+        doc_dir(doc_id) / "validation" / "report.json",
+        "Validation report not ready yet",
+    )
