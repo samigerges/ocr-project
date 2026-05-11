@@ -244,6 +244,24 @@ export default function App() {
                       />
 
                       <ArtifactCard
+                        title="Processed (Receipt)"
+                        src={
+                          page.processed_receipt
+                            ? `/v1/documents/${docId}/processed/receipt/${page.processed_receipt}`
+                            : null
+                        }
+                      />
+
+                      <ArtifactCard
+                        title="Processed (SORIE/SROIE Upscale)"
+                        src={
+                          page.processed_sorie
+                            ? `/v1/documents/${docId}/processed/sorie/${page.processed_sorie}`
+                            : null
+                        }
+                      />
+
+                      <ArtifactCard
                         title="Processed (Strong)"
                         src={
                           page.processed_strong

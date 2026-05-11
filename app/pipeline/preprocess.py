@@ -3,8 +3,12 @@ import json
 import cv2
 import numpy as np
 
-
 MIN_OCR_WIDTH = 1800
+SORIE_MIN_RECEIPT_WIDTH = 2600
+SORIE_MIN_RECEIPT_HEIGHT = 3600
+SORIE_MAX_UPSCALE = 4.0
+
+SUPPORTED_PREPROCESS_MODES = {"basic", "receipt", "strong", "sorie", "sroie"}
 
 
 def _resize_for_ocr(gray: np.ndarray, min_width: int = MIN_OCR_WIDTH) -> np.ndarray:
@@ -13,6 +17,26 @@ def _resize_for_ocr(gray: np.ndarray, min_width: int = MIN_OCR_WIDTH) -> np.ndar
         return gray
 
     scale = min_width / float(width)
+    return cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+
+def _resize_to_receipt_target(
+    gray: np.ndarray,
+    *,
+    min_width: int = SORIE_MIN_RECEIPT_WIDTH,
+    min_height: int = SORIE_MIN_RECEIPT_HEIGHT,
+    max_scale: float = SORIE_MAX_UPSCALE,
+) -> np.ndarray:
+    """Upscale distant receipt crops before OCR while capping memory growth."""
+    height, width = gray.shape[:2]
+    if width <= 0 or height <= 0:
+        return gray
+
+    scale = max(min_width / float(width), min_height / float(height), 1.0)
+    scale = min(scale, max_scale)
+    if scale <= 1.01:
+        return gray
+
     return cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
 
@@ -50,7 +74,9 @@ def _deskew(gray: np.ndarray) -> np.ndarray:
     )
 
 
-def _trim_to_content(img: np.ndarray) -> np.ndarray:
+def _trim_to_content(
+    img: np.ndarray, min_content_area_ratio: float = 0.08
+) -> np.ndarray:
     if len(img.shape) == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
@@ -62,7 +88,7 @@ def _trim_to_content(img: np.ndarray) -> np.ndarray:
         return img
 
     x, y, w, h = cv2.boundingRect(coords)
-    if w * h < gray.shape[0] * gray.shape[1] * 0.08:
+    if w * h < gray.shape[0] * gray.shape[1] * min_content_area_ratio:
         return img
 
     pad = max(12, int(max(gray.shape[:2]) * 0.015))
@@ -99,10 +125,32 @@ def _prepare_receipt(gray: np.ndarray) -> np.ndarray:
     trimmed = _trim_to_content(deskewed)
     normalized = _normalize_contrast(trimmed)
     resized = _resize_for_ocr(normalized)
-    denoised = cv2.fastNlMeansDenoising(resized, None, h=5, templateWindowSize=7, searchWindowSize=21)
+    denoised = cv2.fastNlMeansDenoising(
+        resized, None, h=5, templateWindowSize=7, searchWindowSize=21
+    )
     blurred = cv2.GaussianBlur(denoised, (0, 0), 1.0)
     sharpened = cv2.addWeighted(denoised, 1.45, blurred, -0.45, 0)
     return _add_white_border(sharpened)
+
+
+def _prepare_sorie(gray: np.ndarray) -> np.ndarray:
+    """Prepare SROIE/SORIE receipt photos where the receipt is small or far away.
+
+    The standard OCR resize checks the full image width, which can miss dataset
+    samples photographed from a distance: the overall canvas is already large,
+    but the useful receipt/text crop is not. This variant trims to foreground
+    content first, then upscales the crop toward receipt-sized OCR targets.
+    """
+    deskewed = _deskew(gray)
+    trimmed = _trim_to_content(deskewed, min_content_area_ratio=0.005)
+    normalized = _normalize_contrast(trimmed)
+    upscaled = _resize_to_receipt_target(normalized)
+    denoised = cv2.fastNlMeansDenoising(
+        upscaled, None, h=4, templateWindowSize=7, searchWindowSize=21
+    )
+    blurred = cv2.GaussianBlur(denoised, (0, 0), 0.9)
+    sharpened = cv2.addWeighted(denoised, 1.6, blurred, -0.6, 0)
+    return _add_white_border(sharpened, size=24)
 
 
 def _prepare_strong(gray: np.ndarray) -> np.ndarray:
@@ -112,7 +160,9 @@ def _prepare_strong(gray: np.ndarray) -> np.ndarray:
     deskewed = _deskew(gray)
     normalized = _normalize_contrast(deskewed)
     resized = _resize_for_ocr(normalized)
-    denoised = cv2.fastNlMeansDenoising(resized, None, h=8, templateWindowSize=7, searchWindowSize=21)
+    denoised = cv2.fastNlMeansDenoising(
+        resized, None, h=8, templateWindowSize=7, searchWindowSize=21
+    )
     blurred = cv2.GaussianBlur(denoised, (3, 3), 0)
 
     thresh = cv2.threshold(
@@ -133,6 +183,7 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
     - basic: deskew + contrast normalization + upscale
     - receipt: thermal receipt crop + conservative contrast/sharpening
     - strong: stronger denoise + thresholding + border cleanup
+    - sorie/sroie: crop distant receipt content + high-quality upscale
     """
     img = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
     if img is None:
@@ -149,6 +200,9 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
     elif mode == "strong":
         out = _prepare_strong(gray)
 
+    elif mode in {"sorie", "sroie"}:
+        out = _prepare_sorie(gray)
+
     else:
         raise ValueError(f"Unknown preprocess mode: {mode}")
 
@@ -156,15 +210,20 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
     cv2.imwrite(str(output_path), out)
 
 
-def preprocess_document_pages(pages_dir: Path, processed_dir: Path, mode: str = "basic") -> list[Path]:
+def preprocess_document_pages(
+    pages_dir: Path, processed_dir: Path, mode: str = "basic"
+) -> list[Path]:
     """
     Reads pages_dir/manifest.json and preprocesses ONLY OCR pages.
 
     Output goes to:
       processed_dir/<mode>/page_XXXX.png
 
-    Supported modes are basic, receipt, and strong.
+    Supported modes are basic, receipt, strong, and sorie/sroie.
     """
+    if mode not in SUPPORTED_PREPROCESS_MODES:
+        raise ValueError(f"Unknown preprocess mode: {mode}")
+
     manifest_path = pages_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"Missing manifest: {manifest_path}")

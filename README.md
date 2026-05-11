@@ -82,8 +82,8 @@ Results
 
 * Upload **PDF or image documents**
 * Automatic **PDF page rendering**
-* Multiple **image preprocessing strategies**, including a thermal receipt mode
-* **Retry OCR pipeline** if confidence is low and compare basic/receipt/strong variants
+* Multiple **image preprocessing strategies**, including thermal receipt and SORIE/SROIE distant-receipt upscale modes
+* **Retry OCR pipeline** if confidence is low and compare basic/receipt/sorie/strong variants
 * **Layout-aware text assembly**
 * **Pipeline visualization UI**
 * Asynchronous processing with **Redis + RQ**
@@ -137,6 +137,8 @@ storage/
       pages/
       processed/
          basic/
+         receipt/
+         sorie/
          strong/
       ocr/
       postprocessed/
@@ -213,7 +215,12 @@ cash-sales layouts like Malaysian receipts:
 * validates line-item amount totals, quantity totals, and cash/change arithmetic
 
 The OCR retry metadata records which preprocess variant was selected for each page, so
-you can inspect whether `basic`, `receipt`, or `strong` produced the best text.
+you can inspect whether `basic`, `receipt`, `sorie`, or `strong` produced the best text.
+
+The `sorie` preprocess variant is tuned for SORIE/SROIE-style receipt photos where
+the receipt appears small because the camera was too far away. It crops foreground
+content before applying capped bicubic upscaling, denoising, sharpening, and a clean
+white border so OCR sees larger characters instead of an already-large full canvas.
 
 # Running the Project
 
@@ -282,6 +289,8 @@ Updated pipeline:
 upload
 -> render/native-text routing
 -> preprocess basic
+-> preprocess receipt
+-> preprocess SORIE/SROIE upscale
 -> preprocess strong
 -> OCR with retry
 -> postprocess

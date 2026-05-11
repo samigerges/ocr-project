@@ -7,12 +7,12 @@ from statistics import mean
 import cv2
 import numpy as np
 
-
 BLUR_WARNING_THRESHOLD = 80.0
 BRIGHTNESS_DARK_THRESHOLD = 70.0
 BRIGHTNESS_LIGHT_THRESHOLD = 235.0
 MIN_TEXT_DENSITY = 0.01
 MAX_TEXT_DENSITY = 0.55
+MIN_CONTENT_AREA_RATIO = 0.20
 
 
 def _safe_float(value: float) -> float:
@@ -46,6 +46,18 @@ def estimate_text_density(gray: np.ndarray) -> float:
     return _safe_float(foreground / float(total or 1))
 
 
+def estimate_content_bbox(gray: np.ndarray) -> tuple[list[int] | None, float]:
+    """Estimate the useful foreground bounds and their share of the canvas."""
+    _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    coords = cv2.findNonZero(mask)
+    if coords is None:
+        return None, 0.0
+
+    x, y, w, h = cv2.boundingRect(coords)
+    total = gray.shape[0] * gray.shape[1]
+    return [int(x), int(y), int(w), int(h)], _safe_float((w * h) / float(total or 1))
+
+
 def detect_orientation(width: int, height: int) -> str:
     if width == height:
         return "square"
@@ -64,6 +76,7 @@ def assess_image_quality(image_path: Path) -> dict:
     brightness = _safe_float(float(np.mean(gray)))
     skew_angle = estimate_skew_angle(gray)
     text_density = estimate_text_density(gray)
+    content_bbox, content_area_ratio = estimate_content_bbox(gray)
 
     warnings: list[str] = []
     if blur_score < BLUR_WARNING_THRESHOLD:
@@ -76,6 +89,8 @@ def assess_image_quality(image_path: Path) -> dict:
         warnings.append("low_text_density")
     if text_density > MAX_TEXT_DENSITY:
         warnings.append("high_foreground_density")
+    if content_bbox is not None and content_area_ratio < MIN_CONTENT_AREA_RATIO:
+        warnings.append("document_content_is_small")
     if abs(skew_angle) > 3.0:
         warnings.append("receipt_may_be_skewed")
 
@@ -88,9 +103,15 @@ def assess_image_quality(image_path: Path) -> dict:
         "brightness": brightness,
         "skew_angle": skew_angle,
         "text_density": text_density,
+        "content_bbox": content_bbox,
+        "content_area_ratio": content_area_ratio,
         "warnings": warnings,
         "status": "low_quality" if warnings else "ok",
-        "message": "Image quality may reduce extraction confidence." if warnings else "Image quality looks suitable for OCR.",
+        "message": (
+            "Image quality may reduce extraction confidence."
+            if warnings
+            else "Image quality looks suitable for OCR."
+        ),
     }
 
 
@@ -114,13 +135,23 @@ def assess_pages_from_manifest(pages_dir: Path, quality_dir: Path) -> dict:
     all_warnings = sorted({warning for page in pages for warning in page["warnings"]})
     report = {
         "status": "low_quality" if all_warnings else "ok",
-        "message": "One or more pages may produce low-confidence OCR." if all_warnings else "All assessed pages look suitable for OCR.",
+        "message": (
+            "One or more pages may produce low-confidence OCR."
+            if all_warnings
+            else "All assessed pages look suitable for OCR."
+        ),
         "page_count": len(pages),
-        "average_blur_score": _safe_float(mean([p["blur_score"] for p in pages])) if pages else 0.0,
-        "average_brightness": _safe_float(mean([p["brightness"] for p in pages])) if pages else 0.0,
+        "average_blur_score": (
+            _safe_float(mean([p["blur_score"] for p in pages])) if pages else 0.0
+        ),
+        "average_brightness": (
+            _safe_float(mean([p["brightness"] for p in pages])) if pages else 0.0
+        ),
         "warnings": all_warnings,
         "pages": pages,
     }
     quality_dir.mkdir(parents=True, exist_ok=True)
-    (quality_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (quality_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return report
