@@ -92,3 +92,54 @@ def test_quality_flags_small_document_content(tmp_path):
     assert report["content_bbox"] is not None
     assert report["content_area_ratio"] < 0.20
     assert "document_content_is_small" in report["warnings"]
+
+
+def _write_plain_page(path, *, width, height):
+    canvas = np.full((height, width, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "OCR SCALE TEST",
+        (25, max(55, height // 2)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 0, 0),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.imwrite(str(path), canvas)
+
+
+def test_basic_preprocess_upscales_very_small_images_by_2x(tmp_path):
+    source = tmp_path / "small.png"
+    output = tmp_path / "small_processed.png"
+    _write_plain_page(source, width=800, height=500)
+
+    preprocess_page(source, output, mode="basic")
+
+    processed = cv2.imread(str(output), cv2.IMREAD_GRAYSCALE)
+    assert processed is not None
+    assert processed.shape == (500 * 2 + 36, 800 * 2 + 36)
+
+
+def test_basic_preprocess_upscales_medium_images_by_1_5x(tmp_path):
+    source = tmp_path / "medium.png"
+    output = tmp_path / "medium_processed.png"
+    _write_plain_page(source, width=1200, height=500)
+
+    preprocess_page(source, output, mode="basic")
+
+    processed = cv2.imread(str(output), cv2.IMREAD_GRAYSCALE)
+    assert processed is not None
+    assert processed.shape == (int(500 * 1.5) + 36, int(1200 * 1.5) + 36)
+
+
+def test_basic_preprocess_leaves_large_images_at_original_scale(tmp_path):
+    source = tmp_path / "large.png"
+    output = tmp_path / "large_processed.png"
+    _write_plain_page(source, width=1900, height=500)
+
+    preprocess_page(source, output, mode="basic")
+
+    processed = cv2.imread(str(output), cv2.IMREAD_GRAYSCALE)
+    assert processed is not None
+    assert processed.shape == (500 + 36, 1900 + 36)
