@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 MIN_OCR_WIDTH = 1800
+OCR_DOUBLE_UPSCALE_MAX_WIDTH = 900
 SORIE_MIN_RECEIPT_WIDTH = 2600
 SORIE_MIN_RECEIPT_HEIGHT = 3600
 SORIE_MAX_UPSCALE = 4.0
@@ -11,12 +12,27 @@ SORIE_MAX_UPSCALE = 4.0
 SUPPORTED_PREPROCESS_MODES = {"basic", "receipt", "strong", "sorie", "sroie"}
 
 
+def _ocr_upscale_factor(width: int, min_width: int = MIN_OCR_WIDTH) -> float:
+    """Choose a conservative OCR upscale multiplier for undersized images.
+
+    OCR accuracy drops quickly when character strokes are too small. Rather than
+    resizing to arbitrary dimensions, keep scaling predictable: very small pages
+    get a 2x pass, while pages that are below the OCR width target get a 1.5x
+    pass. Images that already meet the target are left untouched.
+    """
+    if width <= 0 or width >= min_width:
+        return 1.0
+    if width <= OCR_DOUBLE_UPSCALE_MAX_WIDTH:
+        return 2.0
+    return 1.5
+
+
 def _resize_for_ocr(gray: np.ndarray, min_width: int = MIN_OCR_WIDTH) -> np.ndarray:
     _, width = gray.shape[:2]
-    if width >= min_width:
+    scale = _ocr_upscale_factor(width, min_width=min_width)
+    if scale <= 1.0:
         return gray
 
-    scale = min_width / float(width)
     return cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
 
@@ -180,7 +196,7 @@ def preprocess_page(input_path: Path, output_path: Path, mode: str = "basic") ->
     Preprocess one page using the selected mode.
 
     Modes:
-    - basic: deskew + contrast normalization + upscale
+    - basic: deskew + contrast normalization + smart 1.5x/2x upscale
     - receipt: thermal receipt crop + conservative contrast/sharpening
     - strong: stronger denoise + thresholding + border cleanup
     - sorie/sroie: crop distant receipt content + high-quality upscale

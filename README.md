@@ -57,7 +57,7 @@ Render
    │
    ▼
 Preprocess
-(Basic / Receipt / Strong)
+(Basic smart upscale / Receipt / Strong)
    │
    ▼
 OCR
@@ -82,7 +82,7 @@ Results
 
 * Upload **PDF or image documents**
 * Automatic **PDF page rendering**
-* Multiple **image preprocessing strategies**, including thermal receipt and SORIE/SROIE distant-receipt upscale modes
+* Multiple **image preprocessing strategies**, including smart 1.5x/2x OCR upscaling, thermal receipt handling, and SORIE/SROIE distant-receipt upscale modes
 * **Retry OCR pipeline** if confidence is low and compare basic/receipt/sorie/strong variants
 * **Layout-aware text assembly**
 * **Pipeline visualization UI**
